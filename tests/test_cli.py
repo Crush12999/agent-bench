@@ -2,7 +2,8 @@ from pathlib import Path
 import subprocess
 import sys
 
-from agentbench.cli import load_tasks_from_path, select_scorer
+from agentbench.cli import build_agent_loop, load_tasks_from_path, select_scorer
+from agentbench.core.task import RunConfig
 from agentbench.core.task import RuleSpec, ScoringSpec, TaskSpec
 from agentbench.scorers.hybrid import HybridScorer
 from agentbench.scorers.rules import RuleScorer
@@ -38,6 +39,24 @@ def test_select_scorer_by_mode():
 
     assert isinstance(select_scorer([rules_task]), RuleScorer)
     assert isinstance(select_scorer([hybrid_task]), HybridScorer)
+
+
+def test_build_openclaw_agent_loop_uses_model_and_state_dir(tmp_path: Path):
+    config = RunConfig(
+        adapter="openclaw",
+        model="provider/model",
+        adapter_config={
+            "openclaw_binary": "openclaw",
+            "state_dir": str(tmp_path / "state"),
+            "session_artifact_timeout_seconds": 3,
+        },
+    )
+
+    adapter = build_agent_loop(config)
+
+    assert adapter.model == "provider/model"
+    assert adapter.state_dir == tmp_path / "state"
+    assert adapter.session_artifact_timeout_seconds == 3
 
 
 def test_module_entrypoint_runs_fake_example():

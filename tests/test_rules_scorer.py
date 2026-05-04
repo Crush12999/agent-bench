@@ -79,3 +79,23 @@ def test_tool_call_rules(tmp_path: Path):
 
     assert result.score == 1.0
     assert result.passed is True
+
+
+def test_rule_configuration_errors_are_scoring_errors(tmp_path: Path):
+    task = TaskSpec(
+        id="bad-rule",
+        name="Bad Rule",
+        prompt="p",
+        timeout_seconds=1,
+        scoring=ScoringSpec(
+            mode="rules",
+            rules=[RuleSpec(id="bad", type="unsupported", points=1, params={})],
+        ),
+    )
+
+    result = RuleScorer().score(task, run_result(tmp_path, Trace()))
+
+    assert result.status == "scoring_error"
+    assert result.score == 0.0
+    assert result.passed is False
+    assert "unsupported rule type" in result.notes

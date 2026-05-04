@@ -20,10 +20,12 @@ class OpenClawAgentLoop:
     def __init__(
         self,
         openclaw_binary: str = "openclaw",
+        model: str | None = None,
         state_dir: Path | None = None,
         session_artifact_timeout_seconds: int = 15,
     ) -> None:
         self.openclaw_binary = openclaw_binary
+        self.model = model
         self.state_dir = state_dir
         self.session_artifact_timeout_seconds = session_artifact_timeout_seconds
 
@@ -51,7 +53,7 @@ class OpenClawAgentLoop:
             "--json",
             "--timeout",
             str(timeout_seconds),
-        ]
+        ] + (["--model", self.model] if self.model else [])
 
     def run(
         self,
@@ -71,7 +73,7 @@ class OpenClawAgentLoop:
         error = None
         proc: subprocess.Popen[str] | None = None
         try:
-            self.ensure_agent(agent_id, workspace)
+            self.ensure_agent(agent_id, workspace, model=self.model)
             self.prepare_workspace(workspace)
             proc = subprocess.Popen(
                 self.build_agent_command(agent_id, task.prompt, timeout_seconds),
@@ -140,7 +142,10 @@ class OpenClawAgentLoop:
         if model:
             command.extend(["--model", model])
         command.extend(["--workspace", str(workspace), "--non-interactive"])
-        subprocess.run(command, capture_output=True, text=True, check=False)
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip() or f"openclaw agents add exited with {result.returncode}"
+            raise RuntimeError(detail)
         self._configure_models_json(agent_id, model)
         self._delete_stale_sessions_store(agent_id)
 

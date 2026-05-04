@@ -11,6 +11,7 @@ from agentbench.adapters.base import AgentLoop
 from agentbench.core.aggregate import aggregate_scores
 from agentbench.core.result import AgentRunResult, ScoreResult
 from agentbench.core.task import RunConfig, TaskSpec
+from agentbench.core.trace import Trace, TraceEvent
 from agentbench.core.workspace import TrialPaths, WorkspaceManager
 from agentbench.reporters.json import append_jsonl, write_json
 from agentbench.scorers.base import Scorer
@@ -59,8 +60,40 @@ class Runner:
         trial_id: int,
     ) -> tuple[AgentRunResult, ScoreResult, dict[str, Any], TrialPaths]:
         paths = workspace_manager.prepare_trial(task, trial_id)
-        run_result = self.agent_loop.run(task, trial_id, paths.workspace_dir, paths.log_dir, task.timeout_seconds)
-        score_result = self.scorer.score(task, run_result)
+        try:
+            run_result = self.agent_loop.run(task, trial_id, paths.workspace_dir, paths.log_dir, task.timeout_seconds)
+            score_result = self.scorer.score(task, run_result)
+        except Exception as exc:
+            now = datetime.now(timezone.utc).isoformat()
+            error = str(exc)
+            trace = Trace(events=[TraceEvent(type="error", data={"error": error})])
+            paths.stdout_path.write_text("", encoding="utf-8")
+            paths.stderr_path.write_text("", encoding="utf-8")
+            paths.adapter_log_path.write_text(error, encoding="utf-8")
+            run_result = AgentRunResult(
+                task_id=task.id,
+                trial_id=trial_id,
+                status="error",
+                started_at=now,
+                finished_at=now,
+                duration_seconds=0.0,
+                workspace_path=str(paths.workspace_dir),
+                log_dir=str(paths.log_dir),
+                stdout_path=str(paths.stdout_path),
+                stderr_path=str(paths.stderr_path),
+                trace_path=str(paths.trace_path),
+                adapter_log_path=str(paths.adapter_log_path),
+                trace=trace,
+                error=error,
+            )
+            score_result = ScoreResult(
+                task_id=task.id,
+                trial_id=trial_id,
+                status="skipped",
+                score=0.0,
+                passed=False,
+                notes=error,
+            )
         write_json(paths.trace_path, run_result.trace.to_dict())
         write_json(paths.result_path, {"run": run_result.to_dict(), "score": score_result.to_dict()})
         row = {

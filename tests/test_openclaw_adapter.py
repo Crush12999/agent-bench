@@ -1,6 +1,8 @@
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from agentbench.adapters.openclaw import OpenClawAgentLoop
 from agentbench.core.task import RunConfig
 
@@ -11,6 +13,26 @@ def test_agent_command_uses_json_and_timeout():
     command = adapter.build_agent_command("agent-1", "hello", 30)
 
     assert command == ["openclaw", "agent", "--agent", "agent-1", "--message", "hello", "--json", "--timeout", "30"]
+
+
+def test_agent_command_uses_configured_model():
+    adapter = OpenClawAgentLoop(openclaw_binary="openclaw", model="provider/model")
+
+    command = adapter.build_agent_command("agent-1", "hello", 30)
+
+    assert command == [
+        "openclaw",
+        "agent",
+        "--agent",
+        "agent-1",
+        "--message",
+        "hello",
+        "--json",
+        "--timeout",
+        "30",
+        "--model",
+        "provider/model",
+    ]
 
 
 def test_resolve_transcript_prefers_sessions_json_session_file(tmp_path: Path):
@@ -68,6 +90,21 @@ def test_ensure_agent_recreates_stale_workspace(monkeypatch, tmp_path: Path):
         str(tmp_path / "workspace"),
         "--non-interactive",
     ] in calls
+
+
+def test_ensure_agent_reports_creation_failure(monkeypatch, tmp_path: Path):
+    def fake_run(command, **kwargs):
+        if command == ["openclaw", "agents", "list"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[:3] == ["openclaw", "agents", "add"]:
+            return subprocess.CompletedProcess(command, 2, stdout="", stderr="create failed")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    adapter = OpenClawAgentLoop(openclaw_binary="openclaw", state_dir=tmp_path / "state")
+
+    with pytest.raises(RuntimeError, match="create failed"):
+        adapter.ensure_agent("agent-1", tmp_path / "workspace", model="provider/model")
 
 
 def test_parse_transcript_normalizes_openclaw_message_events(tmp_path: Path):

@@ -32,6 +32,8 @@ def build_agent_loop(config: RunConfig):
     if config.adapter == "openclaw":
         return OpenClawAgentLoop(
             openclaw_binary=str(config.adapter_config.get("openclaw_binary", "openclaw")),
+            model=config.model,
+            state_dir=Path(str(config.adapter_config["state_dir"])) if config.adapter_config.get("state_dir") else None,
             session_artifact_timeout_seconds=int(config.adapter_config.get("session_artifact_timeout_seconds", 15)),
         )
     raise ValueError(f"unsupported adapter: {config.adapter}")

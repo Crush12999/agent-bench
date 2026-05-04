@@ -11,6 +11,17 @@ from agentbench.core.task import RuleSpec, TaskSpec
 class RuleScorer:
     def score(self, task: TaskSpec, run: AgentRunResult) -> ScoreResult:
         checks = [self._score_rule(rule, run) for rule in task.scoring.rules]
+        errors = [check.detail for check in checks if check.detail.startswith("scoring_error: ")]
+        if errors:
+            return ScoreResult(
+                task_id=task.id,
+                trial_id=run.trial_id,
+                status="scoring_error",
+                score=0.0,
+                passed=False,
+                breakdown=checks,
+                notes="; ".join(errors),
+            )
         total_points = sum(check.points for check in checks)
         earned = sum(check.points * check.score for check in checks)
         score = round(earned / total_points, 4) if total_points else 0.0
@@ -34,7 +45,7 @@ class RuleScorer:
                 detail=detail,
             )
         except Exception as exc:
-            return CheckResult(id=rule.id, score=0.0, points=rule.points, passed=False, detail=str(exc))
+            return CheckResult(id=rule.id, score=0.0, points=rule.points, passed=False, detail=f"scoring_error: {exc}")
 
     def _evaluate(self, rule: RuleSpec, run: AgentRunResult) -> tuple[bool, str]:
         params = rule.params
