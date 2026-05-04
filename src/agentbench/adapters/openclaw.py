@@ -28,6 +28,7 @@ class OpenClawAgentLoop:
         self.model = model
         self.state_dir = state_dir
         self.session_artifact_timeout_seconds = session_artifact_timeout_seconds
+        self.command_env = self._build_command_env()
 
     def preflight(self, config: RunConfig) -> PreflightResult:
         try:
@@ -37,6 +38,7 @@ class OpenClawAgentLoop:
                 text=True,
                 check=False,
                 timeout=30,
+                env=self.command_env,
             )
         except FileNotFoundError as exc:
             return PreflightResult(ok=False, message=str(exc))
@@ -82,6 +84,7 @@ class OpenClawAgentLoop:
                 stderr=subprocess.PIPE,
                 text=True,
                 preexec_fn=os.setsid,
+                env=self.command_env,
             )
             stdout, stderr = proc.communicate(timeout=timeout_seconds)
             if proc.returncode not in (0, 255, -1):
@@ -132,17 +135,21 @@ class OpenClawAgentLoop:
                 self._delete_stale_sessions_store(agent_id)
                 return
             delete_name = normalized_id if normalized_id in existing_agents else agent_id
-            subprocess.run(
+            delete_result = subprocess.run(
                 [self.openclaw_binary, "agents", "delete", delete_name, "--force"],
                 capture_output=True,
                 text=True,
                 check=False,
+                env=self.command_env,
             )
+            if delete_result.returncode != 0:
+                detail = delete_result.stderr.strip() or delete_result.stdout.strip() or f"openclaw agents delete exited with {delete_result.returncode}"
+                raise RuntimeError(detail)
         command = [self.openclaw_binary, "agents", "add", agent_id]
         if model:
             command.extend(["--model", model])
         command.extend(["--workspace", str(workspace), "--non-interactive"])
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        result = subprocess.run(command, capture_output=True, text=True, check=False, env=self.command_env)
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip() or f"openclaw agents add exited with {result.returncode}"
             raise RuntimeError(detail)
@@ -263,7 +270,7 @@ class OpenClawAgentLoop:
         return self._agent_store_dir(agent_id) / "sessions"
 
     def _agent_store_dir(self, agent_id: str) -> Path:
-        base = self.state_dir if self.state_dir is not None else Path.home() / ".openclaw"
+        base = Path(self.command_env["OPENCLAW_STATE_DIR"]) if self.state_dir is not None else Path.home() / ".openclaw"
         return base / "agents" / agent_id
 
     def _agent_id(self, task_id: str, trial_id: int) -> str:
@@ -273,12 +280,22 @@ class OpenClawAgentLoop:
         return agent_id.replace(":", "-").lower()
 
     def _list_existing_agents(self) -> set[str]:
+        json_payload = self._load_agents_json()
+        if json_payload is not None:
+            existing_agents: set[str] = set()
+            for item in json_payload:
+                for key in ("id", "agentId", "name"):
+                    value = item.get(key)
+                    if isinstance(value, str) and value.strip():
+                        existing_agents.add(value.strip().lower())
+            return existing_agents
         try:
             result = subprocess.run(
                 [self.openclaw_binary, "agents", "list"],
                 capture_output=True,
                 text=True,
                 check=False,
+                env=self.command_env,
             )
         except FileNotFoundError:
             return set()
@@ -294,12 +311,26 @@ class OpenClawAgentLoop:
         return existing_agents
 
     def _get_agent_workspace(self, agent_id: str) -> Path | None:
+        json_payload = self._load_agents_json()
+        normalized_id = self._normalize_agent_id(agent_id)
+        if json_payload is not None:
+            for item in json_payload:
+                candidates = {
+                    str(item.get("id", "")).strip().lower(),
+                    str(item.get("agentId", "")).strip().lower(),
+                    str(item.get("name", "")).strip().lower(),
+                }
+                if agent_id.lower() in candidates or normalized_id in candidates:
+                    workspace = item.get("workspace")
+                    return Path(workspace).expanduser() if isinstance(workspace, str) and workspace.strip() else None
+            return None
         try:
             result = subprocess.run(
                 [self.openclaw_binary, "agents", "list"],
                 capture_output=True,
                 text=True,
                 check=False,
+                env=self.command_env,
             )
         except FileNotFoundError:
             return None
@@ -319,6 +350,27 @@ class OpenClawAgentLoop:
             elif found_agent and stripped.startswith("- "):
                 break
         return None
+
+    def _load_agents_json(self) -> list[dict[str, Any]] | None:
+        try:
+            result = subprocess.run(
+                [self.openclaw_binary, "agents", "list", "--json"],
+                capture_output=True,
+                text=True,
+                check=False,
+                env=self.command_env,
+            )
+        except FileNotFoundError:
+            return None
+        if result.returncode != 0:
+            return None
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, list):
+            return None
+        return [item for item in payload if isinstance(item, dict)]
 
     def _session_ids_from_metadata(self, sessions_dir: Path) -> list[str]:
         sessions_path = sessions_dir / "sessions.json"
@@ -370,3 +422,12 @@ class OpenClawAgentLoop:
                 sessions_store.unlink()
             except OSError:
                 return
+
+    def _build_command_env(self) -> dict[str, str]:
+        env = dict(os.environ)
+        if self.state_dir is not None:
+            state_dir = str(self.state_dir)
+            env.setdefault("OPENCLAW_HOME", state_dir)
+            env["OPENCLAW_STATE_DIR"] = state_dir
+            env.setdefault("OPENCLAW_CONFIG_PATH", str(Path(state_dir) / "openclaw.json"))
+        return env

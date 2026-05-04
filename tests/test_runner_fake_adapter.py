@@ -72,3 +72,32 @@ def test_runner_records_trial_errors_without_aborting_run(tmp_path: Path):
     assert "agent exploded" in bad["error"]
     assert Path(bad["log_dir"], "result.json").exists()
     assert good["status"] == "success"
+
+
+class ExplodingScorer:
+    def score(self, task, run):
+        raise RuntimeError("scorer exploded")
+
+
+def test_runner_records_scoring_errors_without_replacing_run_result(tmp_path: Path):
+    config = RunConfig(
+        adapter="fake",
+        model="fake",
+        trials=1,
+        parallelism=1,
+        output_dir=str(tmp_path),
+        workspace_policy="all",
+    )
+    runner = Runner(config=config, agent_loop=FakeAgentLoop(), scorer=ExplodingScorer())
+
+    result = runner.run([task("scoring")])
+
+    run_dir = Path(result["run_dir"])
+    row = json.loads((run_dir / "trials.jsonl").read_text(encoding="utf-8").strip())
+    result_json = json.loads(Path(row["log_dir"], "result.json").read_text(encoding="utf-8"))
+    assert row["status"] == "success"
+    assert row["score"] == 0.0
+    assert row["passed"] is False
+    assert result_json["run"]["status"] == "success"
+    assert result_json["score"]["status"] == "scoring_error"
+    assert "scorer exploded" in result_json["score"]["notes"]

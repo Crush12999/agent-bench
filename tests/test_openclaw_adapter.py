@@ -64,11 +64,31 @@ def test_preflight_reports_missing_binary(monkeypatch):
     assert "missing" in result.message
 
 
+def test_preflight_passes_state_dir_environment(monkeypatch, tmp_path: Path):
+    seen_env = {}
+
+    def fake_run(command, **kwargs):
+        seen_env.update(kwargs["env"])
+        return subprocess.CompletedProcess(command, 0, stdout="[]", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    adapter = OpenClawAgentLoop(openclaw_binary="openclaw", state_dir=tmp_path / "state")
+
+    result = adapter.preflight(RunConfig(adapter="openclaw", model="m"))
+
+    assert result.ok is True
+    assert seen_env["OPENCLAW_HOME"] == str(tmp_path / "state")
+    assert seen_env["OPENCLAW_STATE_DIR"] == str(tmp_path / "state")
+    assert seen_env["OPENCLAW_CONFIG_PATH"] == str(tmp_path / "state" / "openclaw.json")
+
+
 def test_ensure_agent_recreates_stale_workspace(monkeypatch, tmp_path: Path):
     calls = []
+    envs = []
 
     def fake_run(command, **kwargs):
         calls.append(command)
+        envs.append(kwargs["env"])
         if command == ["openclaw", "agents", "list"]:
             return subprocess.CompletedProcess(command, 0, stdout="- agent-1\n  Workspace: /old/workspace\n", stderr="")
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
@@ -90,6 +110,42 @@ def test_ensure_agent_recreates_stale_workspace(monkeypatch, tmp_path: Path):
         str(tmp_path / "workspace"),
         "--non-interactive",
     ] in calls
+    assert all(env["OPENCLAW_STATE_DIR"] == str(tmp_path / "state") for env in envs)
+
+
+def test_ensure_agent_recreates_stale_workspace_from_json_list(monkeypatch, tmp_path: Path):
+    calls = []
+    old_workspace = tmp_path / "old"
+    new_workspace = tmp_path / "new"
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if command == ["openclaw", "agents", "list", "--json"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout='[{"id":"agent-1","workspace":"' + str(old_workspace) + '"}]',
+                stderr="",
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    adapter = OpenClawAgentLoop(openclaw_binary="openclaw", state_dir=tmp_path / "state")
+
+    adapter.ensure_agent("agent-1", new_workspace, model="provider/model")
+
+    assert ["openclaw", "agents", "delete", "agent-1", "--force"] in calls
+    assert [
+        "openclaw",
+        "agents",
+        "add",
+        "agent-1",
+        "--model",
+        "provider/model",
+        "--workspace",
+        str(new_workspace),
+        "--non-interactive",
+    ] in calls
 
 
 def test_ensure_agent_reports_creation_failure(monkeypatch, tmp_path: Path):
@@ -104,6 +160,26 @@ def test_ensure_agent_reports_creation_failure(monkeypatch, tmp_path: Path):
     adapter = OpenClawAgentLoop(openclaw_binary="openclaw", state_dir=tmp_path / "state")
 
     with pytest.raises(RuntimeError, match="create failed"):
+        adapter.ensure_agent("agent-1", tmp_path / "workspace", model="provider/model")
+
+
+def test_ensure_agent_reports_delete_failure(monkeypatch, tmp_path: Path):
+    def fake_run(command, **kwargs):
+        if command == ["openclaw", "agents", "list", "--json"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout='[{"id":"agent-1","workspace":"/old/workspace"}]',
+                stderr="",
+            )
+        if command[:3] == ["openclaw", "agents", "delete"]:
+            return subprocess.CompletedProcess(command, 3, stdout="", stderr="delete failed")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    adapter = OpenClawAgentLoop(openclaw_binary="openclaw", state_dir=tmp_path / "state")
+
+    with pytest.raises(RuntimeError, match="delete failed"):
         adapter.ensure_agent("agent-1", tmp_path / "workspace", model="provider/model")
 
 

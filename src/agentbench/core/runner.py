@@ -62,7 +62,6 @@ class Runner:
         paths = workspace_manager.prepare_trial(task, trial_id)
         try:
             run_result = self.agent_loop.run(task, trial_id, paths.workspace_dir, paths.log_dir, task.timeout_seconds)
-            score_result = self.scorer.score(task, run_result)
         except Exception as exc:
             now = datetime.now(timezone.utc).isoformat()
             error = str(exc)
@@ -94,6 +93,18 @@ class Runner:
                 passed=False,
                 notes=error,
             )
+        else:
+            try:
+                score_result = self.scorer.score(task, run_result)
+            except Exception as exc:
+                score_result = ScoreResult(
+                    task_id=task.id,
+                    trial_id=trial_id,
+                    status="scoring_error",
+                    score=0.0,
+                    passed=False,
+                    notes=str(exc),
+                )
         write_json(paths.trace_path, run_result.trace.to_dict())
         write_json(paths.result_path, {"run": run_result.to_dict(), "score": score_result.to_dict()})
         row = {
