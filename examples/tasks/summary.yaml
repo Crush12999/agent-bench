@@ -1,0 +1,17 @@
+id: summary
+name: Summary
+timeout_seconds: 30
+pass_threshold: 0.6
+prompt: |
+  Read report.txt and write summary.md.
+seed_files:
+  - source: fixtures/report.txt
+    dest: report.txt
+scoring:
+  mode: rules
+  rules:
+    - id: summary_exists
+      type: file_exists
+      points: 1
+      params:
+        path: summary.md

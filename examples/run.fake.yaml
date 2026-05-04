@@ -1,0 +1,7 @@
+run:
+  adapter: fake
+  model: fake
+  trials: 2
+  parallelism: 2
+  output_dir: runs
+  workspace_policy: failed

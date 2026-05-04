@@ -1,0 +1,1 @@
+AgentBench verifies isolated workspaces, logs, scoring, and aggregation.

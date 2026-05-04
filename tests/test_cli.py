@@ -1,4 +1,6 @@
 from pathlib import Path
+import subprocess
+import sys
 
 from agentbench.cli import load_tasks_from_path, select_scorer
 from agentbench.core.task import RuleSpec, ScoringSpec, TaskSpec
@@ -36,3 +38,23 @@ def test_select_scorer_by_mode():
 
     assert isinstance(select_scorer([rules_task]), RuleScorer)
     assert isinstance(select_scorer([hybrid_task]), HybridScorer)
+
+
+def test_module_entrypoint_runs_fake_example():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "agentbench.cli",
+            "run",
+            "--config",
+            "examples/run.fake.yaml",
+            "examples/tasks",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip().startswith("runs/")
