@@ -68,3 +68,33 @@ def test_ensure_agent_recreates_stale_workspace(monkeypatch, tmp_path: Path):
         str(tmp_path / "workspace"),
         "--non-interactive",
     ] in calls
+
+
+def test_parse_transcript_normalizes_openclaw_message_events(tmp_path: Path):
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"done"}]},"timestamp":"t"}\n'
+        '{"type":"message","message":{"role":"user","content":[{"type":"text","text":"prompt"}]},"timestamp":"t"}\n',
+        encoding="utf-8",
+    )
+    adapter = OpenClawAgentLoop(openclaw_binary="openclaw")
+
+    trace = adapter.parse_transcript(transcript)
+
+    assert len(trace.events) == 1
+    assert trace.events[0].type == "assistant_message"
+    assert trace.events[0].data["text"] == "done"
+
+
+def test_prepare_workspace_removes_bootstrap_files(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for name in ("BOOTSTRAP.md", "SOUL.md", "USER.md", "IDENTITY.md", "HEARTBEAT.md"):
+        (workspace / name).write_text("bootstrap", encoding="utf-8")
+    (workspace / "keep.txt").write_text("keep", encoding="utf-8")
+    adapter = OpenClawAgentLoop(openclaw_binary="openclaw")
+
+    adapter.prepare_workspace(workspace)
+
+    assert not (workspace / "BOOTSTRAP.md").exists()
+    assert (workspace / "keep.txt").exists()

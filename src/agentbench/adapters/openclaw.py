@@ -72,6 +72,7 @@ class OpenClawAgentLoop:
         proc: subprocess.Popen[str] | None = None
         try:
             self.ensure_agent(agent_id, workspace)
+            self.prepare_workspace(workspace)
             proc = subprocess.Popen(
                 self.build_agent_command(agent_id, task.prompt, timeout_seconds),
                 cwd=str(workspace),
@@ -143,6 +144,15 @@ class OpenClawAgentLoop:
         self._configure_models_json(agent_id, model)
         self._delete_stale_sessions_store(agent_id)
 
+    def prepare_workspace(self, workspace: Path) -> None:
+        for bootstrap_file in ("BOOTSTRAP.md", "SOUL.md", "USER.md", "IDENTITY.md", "HEARTBEAT.md"):
+            path = workspace / bootstrap_file
+            if path.exists():
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+
     def load_trace(self, agent_id: str) -> Trace:
         sessions_dir = self.agent_sessions_dir(agent_id)
         deadline = time.monotonic() + self.session_artifact_timeout_seconds
@@ -207,9 +217,30 @@ class OpenClawAgentLoop:
                 continue
             if raw.get("type") in {"tool_call", "tool_result", "assistant_message", "file_event", "error"}:
                 events.append(TraceEvent(type=raw["type"], data=raw))
+            elif raw.get("type") == "message":
+                event = self._trace_event_from_message(raw)
+                if event is not None:
+                    events.append(event)
             elif raw.get("text"):
                 events.append(TraceEvent(type="assistant_message", data={"text": raw["text"]}))
         return Trace(events=events)
+
+    def _trace_event_from_message(self, raw: dict[str, Any]) -> TraceEvent | None:
+        message = raw.get("message")
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            return None
+        text_parts: list[str] = []
+        content = message.get("content")
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    text_parts.append(str(item.get("text", "")))
+        elif isinstance(content, str):
+            text_parts.append(content)
+        text = "".join(text_parts).strip()
+        if not text:
+            return None
+        return TraceEvent(type="assistant_message", timestamp=raw.get("timestamp"), data={"text": text, "raw": raw})
 
     def kill_process_group(self, proc: subprocess.Popen[str] | None) -> None:
         if proc is None:
