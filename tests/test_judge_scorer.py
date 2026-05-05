@@ -58,6 +58,8 @@ def make_run(tmp_path: Path, trace: Trace) -> AgentRunResult:
 def test_build_judge_prompt_includes_execution_trace_and_workspace_files(tmp_path: Path):
     (tmp_path / "summary.md").write_text("Final summary from workspace.", encoding="utf-8")
     (tmp_path / ".hidden").write_text("secret", encoding="utf-8")
+    (tmp_path / ".cache").mkdir()
+    (tmp_path / ".cache" / "secret.txt").write_text("hidden dir secret", encoding="utf-8")
     (tmp_path / "BOOTSTRAP.md").write_text("bootstrap", encoding="utf-8")
     trace = Trace(
         events=[
@@ -93,5 +95,6 @@ def test_build_judge_prompt_includes_execution_trace_and_workspace_files(tmp_pat
     assert "Error: minor warning" in prompt
     assert "### File: summary.md" in prompt
     assert "Final summary from wo" in prompt
+    assert "hidden dir secret" not in prompt
     assert "secret" not in prompt
     assert "bootstrap" not in prompt
