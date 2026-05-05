@@ -5,6 +5,7 @@ description = "Minimal adapter-ready OpenClaw agent evaluation framework"
 requires-python = ">=3.11"
 dependencies = [
   "PyYAML>=6.0.1",
+  "requests>=2.32",
 ]
 
 [project.optional-dependencies]
