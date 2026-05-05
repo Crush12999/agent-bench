@@ -85,7 +85,7 @@ class JudgeScorer:
             if not isinstance(scores, dict):
                 return self._error(task, run, "judge scores must be an object")
             try:
-                parsed_scores = [(str(item_id), float(item_score)) for item_id, item_score in scores.items()]
+                parsed_scores = [(str(item_id), self._extract_number(item_score)) for item_id, item_score in scores.items()]
             except (TypeError, ValueError):
                 return self._error(task, run, "judge scores must be numeric")
             if any(not 0.0 <= item_score <= 1.0 for _, item_score in parsed_scores):
@@ -194,9 +194,18 @@ class JudgeScorer:
         """从推荐或简化 Judge JSON 结构中提取总分。"""
         value = payload.get("total", payload.get("score"))
         try:
-            return float(value)
+            return self._extract_number(value)
         except (TypeError, ValueError):
             return None
+
+    def _extract_number(self, value: object) -> float:
+        """从 JSON 数字中提取浮点数，排除 bool 等非评分值。"""
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError("judge score must be a number")
+        try:
+            return float(value)
+        except ValueError as exc:
+            raise ValueError("judge score must be a number") from exc
 
     def _truncate(self, value: str, max_chars: int) -> str:
         """按字符数截断文本，并标记被截断的内容。"""

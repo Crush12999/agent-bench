@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from agentbench.core.result import AgentRunResult
+from agentbench.core.result import AgentRunResult, CheckResult
 from agentbench.core.task import JudgeConfig, ScoringSpec, TaskSpec
 from agentbench.core.trace import Trace, TraceEvent
 from agentbench.scorers.judge import JudgeScorer
@@ -105,7 +105,7 @@ def test_parse_judge_scores_total_notes(tmp_path: Path):
     result = scorer.parse_judge_text(
         make_task(),
         make_run(tmp_path, Trace()),
-        '{"scores": {"accuracy": 0.8, "style": 1.0}, "total": 0.9, "notes": "good"}',
+        '{"scores": {"accuracy": 0.8, "style": 0.7}, "total": 0.9, "notes": "good"}',
     )
 
     assert result.status == "scored"
@@ -113,6 +113,9 @@ def test_parse_judge_scores_total_notes(tmp_path: Path):
     assert result.passed is True
     assert result.notes == "good"
     assert [item.id for item in result.breakdown] == ["accuracy", "style"]
+    assert all(isinstance(item, CheckResult) for item in result.breakdown)
+    assert [item.score for item in result.breakdown] == [0.8, 0.7]
+    assert [item.passed for item in result.breakdown] == [True, False]
 
 
 def test_parse_judge_simplified_score_reason(tmp_path: Path):
@@ -139,8 +142,11 @@ def test_parse_judge_invalid_structure_is_scoring_error(tmp_path: Path):
     for output in [
         "[]",
         '{"scores": [], "total": 0.8}',
+        '{"scores": {"accuracy": "high"}, "total": 0.8}',
         '{"total": 1.2}',
         '{"scores": {"accuracy": 2.0}, "total": 0.8}',
+        '{"scores": {"accuracy": true}, "total": 0.8}',
+        '{"score": true}',
         '{"notes": "missing total"}',
     ]:
         result = scorer.parse_judge_text(make_task(), make_run(tmp_path, Trace()), output)
