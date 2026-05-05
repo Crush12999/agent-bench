@@ -46,7 +46,7 @@ src/agentbench/
 ├── scorers/
 │   ├── base.py        # Scorer 协议
 │   ├── hybrid.py      # 混合评分器
-│   ├── judge.py       # Judge 占位评分器
+│   ├── judge.py       # LLM Judge 评分器
 │   └── rules.py       # 确定性规则评分器
 └── cli.py             # CLI 入口和装配逻辑
 ```
@@ -165,6 +165,104 @@ class MyScorer:
 
 新增规则应保持输入参数简单，错误信息清晰。
 
+### JudgeScorer 开发说明
+
+`JudgeScorer` 负责把一次 trial 的执行结果转换成外部 LLM Judge 可评分的上下文，并把 Judge 输出规范化为 `ScoreResult`。当前支持两类供应商协议：
+
+- `provider: openai`：调用 OpenAI-compatible `POST /chat/completions`。
+- `provider: anthropic`：调用 Anthropic Messages `POST /v1/messages`。
+
+供应商协议和 HTTP 调用只应放在 `src/agentbench/scorers/judge.py`。Core 层只认识 `JudgeConfig` 数据模型，不应依赖 OpenAI、Anthropic、API key 或请求路径等概念。
+
+#### run 级配置
+
+Judge 配置来自 `RunConfig.judge`，CLI 会把它注入 `JudgeScorer` 或 `HybridScorer`：
+
+```yaml
+run:
+  judge:
+    provider: openai
+    model: gpt-4o-mini
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    temperature: 0
+    timeout_seconds: 60
+    max_tokens: 512
+    max_context_chars: 20000
+    max_tool_result_chars: 1000
+    max_workspace_file_chars: 3000
+    max_retries: 2
+    retry_backoff_seconds: 1
+```
+
+`.env` 由 CLI 从当前工作目录加载。实现和测试中都不要把真实 API key 写入 YAML、Python 文件或文档示例。
+
+#### 上下文构造边界
+
+Judge 输入由 `JudgeScorer.build_prompt()` 构造，包含：
+
+- 任务 ID、名称、提示词和 `judge_rubric`。
+- `AgentRunResult` 的状态、耗时和错误。
+- trace 摘要：assistant 文本、tool call、tool result、file event 和 error。
+- trial 工作区内普通文本文件的预览。
+
+上下文预算由 `max_context_chars`、`max_tool_result_chars` 和 `max_workspace_file_chars` 控制。读取工作区文件时需要跳过隐藏目录、`.git`、`.openclaw`、`__pycache__`、`node_modules`、`skills` 和 OpenClaw bootstrap 文件，避免把框架内部状态或无关大文件送给 Judge。
+
+#### 响应解析和错误语义
+
+Judge 推荐返回：
+
+```json
+{"scores": {"accuracy": 0.9}, "total": 0.9, "notes": "good"}
+```
+
+兼容简化返回：
+
+```json
+{"score": 0.9, "reason": "good"}
+```
+
+解析约定：
+
+- `total`、`score` 和 `scores` 分项必须是 `0.0` 到 `1.0` 的数字，不能是布尔值或字符串。
+- `scores` 会转换成 `CheckResult` 明细。
+- 非 JSON、非法结构、分数越界、配置错误、缺少 API key 或供应商协议响应异常都返回 `status="scoring_error"`。
+- `HybridScorer` 不应吞掉 Judge 的 `scoring_error`；规则或 Judge 任一侧评分失败时，混合评分也应返回 `scoring_error`。
+
+#### Judge API 重试
+
+Judge API 重试只包裹外部 HTTP 请求，不得重试 Agent trial。可重试错误包括：
+
+- `requests` 网络异常。
+- 请求超时。
+- HTTP `429`。
+- HTTP `5xx`。
+
+不可重试错误包括：
+
+- 缺少 API key。
+- `temperature`、`max_retries`、`retry_backoff_seconds` 或上下文预算非法。
+- HTTP `4xx`（除 `429` 外）。
+- 响应结构不符合供应商协议。
+- Judge 输出不是合法评分 JSON。
+
+`max_retries` 表示失败后最多重试次数，合法范围是 `1` 到 `5`；总尝试次数是 `1 + max_retries`。退避时间从 `retry_backoff_seconds` 开始，按指数递增。测试重试逻辑时必须 monkeypatch `time.sleep`，避免真实等待。
+
+#### 测试要求
+
+修改 Judge 相关逻辑时至少考虑这些测试文件：
+
+- `tests/test_judge_scorer.py`：上下文构造、OpenAI / Anthropic 协议、响应解析、错误路径和重试。
+- `tests/test_cli.py`：`.env` 加载和 `RunConfig.judge` 注入。
+- `tests/test_hybrid_scorer.py`：规则分和 Judge 分合并，以及 `scoring_error` 传播。
+
+提交前建议运行：
+
+```bash
+pytest tests/test_judge_scorer.py tests/test_cli.py tests/test_hybrid_scorer.py -q
+pytest -q
+```
+
 ## 结果模型约定
 
 ### AgentRunResult
@@ -208,10 +306,11 @@ pytest -q
 | `tests/test_workspace.py` | trial 工作区创建和清理策略。 |
 | `tests/test_result_models.py` | 结果模型序列化。 |
 | `tests/test_rules_scorer.py` | 规则评分和 scoring error。 |
-| `tests/test_hybrid_scorer.py` | 混合评分权重计算。 |
+| `tests/test_hybrid_scorer.py` | 混合评分权重计算和 Judge 错误传播。 |
+| `tests/test_judge_scorer.py` | Judge 上下文、协议调用、响应解析、错误路径和重试。 |
 | `tests/test_runner_fake_adapter.py` | Runner 编排、trial 级异常隔离和输出文件。 |
 | `tests/test_openclaw_adapter.py` | OpenClaw 命令构造、状态目录隔离和 transcript 解析。 |
-| `tests/test_cli.py` | CLI 装配和 fake 示例运行。 |
+| `tests/test_cli.py` | CLI 装配、`.env` 加载和 fake 示例运行。 |
 | `tests/test_aggregate.py` | 汇总指标计算。 |
 
 开发新功能时建议遵循 TDD：

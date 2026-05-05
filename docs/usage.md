@@ -252,6 +252,120 @@ result.json
 
 如果 OpenClaw 创建 agent 失败、执行超时或 transcript 缺失，相关信息会写入 `adapter.log` 和 `result.json`。
 
+## 使用 Judge 评分
+
+Judge 评分通过 run 级 `judge` 配置调用外部模型。任务 YAML 只声明 `scoring.mode: judge` 和 `judge_rubric`；模型供应商、鉴权环境变量、上下文预算和重试策略都放在 run 配置中，便于同一组任务切换不同 Judge。
+
+### 配置 `.env`
+
+`agentbench run` 会自动加载当前工作目录下的 `.env`，并且不会覆盖已经存在的系统环境变量。`.env` 不应提交到 Git。
+
+```bash
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+如果使用 OpenAI-compatible 服务，只需要把 `api_key_env` 指向对应环境变量，不要把明文密钥写进 YAML。
+
+### OpenAI-compatible 配置
+
+```yaml
+run:
+  adapter: fake
+  model: fake
+  trials: 1
+  parallelism: 1
+  output_dir: runs
+  workspace_policy: failed
+  judge:
+    provider: openai
+    model: gpt-4o-mini
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    temperature: 0
+    timeout_seconds: 60
+    max_tokens: 512
+    max_context_chars: 20000
+    max_tool_result_chars: 1000
+    max_workspace_file_chars: 3000
+    max_retries: 2
+    retry_backoff_seconds: 1
+```
+
+### Anthropic 配置
+
+```yaml
+run:
+  adapter: fake
+  model: fake
+  judge:
+    provider: anthropic
+    model: claude-3-5-sonnet-latest
+    base_url: https://api.anthropic.com
+    api_key_env: ANTHROPIC_API_KEY
+    temperature: 0
+    timeout_seconds: 60
+    max_tokens: 512
+    max_context_chars: 20000
+    max_tool_result_chars: 1000
+    max_workspace_file_chars: 3000
+    max_retries: 2
+    retry_backoff_seconds: 1
+```
+
+### Judge 任务示例
+
+```yaml
+id: judge-summary
+name: Judge Summary
+timeout_seconds: 30
+pass_threshold: 0.7
+prompt: |
+  Read report.txt and write a concise summary.md.
+seed_files:
+  - source: fixtures/report.txt
+    dest: report.txt
+scoring:
+  mode: judge
+  judge_rubric: |
+    Score whether summary.md captures the main findings, avoids unsupported claims,
+    and is concise. Return JSON only.
+```
+
+Judge 输入会包含：
+
+- 任务提示词和 `judge_rubric`。
+- Agent 执行状态、耗时和错误信息。
+- 标准 trace 摘要，包括 assistant 文本、tool call、tool result、file event 和 error。
+- trial 工作区中的文本文件预览。
+
+大型内容会按 `max_context_chars`、`max_tool_result_chars` 和 `max_workspace_file_chars` 截断。隐藏目录、`.git`、`.openclaw`、`node_modules`、`skills` 和 OpenClaw bootstrap 文件不会进入 Judge 上下文。
+
+### Judge 输出格式
+
+推荐输出：
+
+```json
+{"scores": {"accuracy": 0.9, "conciseness": 0.8}, "total": 0.85, "notes": "summary is accurate and concise"}
+```
+
+也支持简化输出：
+
+```json
+{"score": 0.85, "reason": "summary is accurate and concise"}
+```
+
+`total` 或 `score` 必须是 `0.0` 到 `1.0` 之间的数字。解析失败、配置非法、缺少 API key 或供应商响应结构异常都会返回 `ScoreResult(status="scoring_error")`。
+
+### Judge API 重试
+
+Judge API 会对 `requests` 网络异常、超时、HTTP `429` 和 HTTP `5xx` 做有限次数指数退避重试，不会重新执行 Agent trial。
+
+- `max_retries` 表示失败后最多重试次数，合法范围是 `1` 到 `5`。
+- 总尝试次数为 `1 + max_retries`。
+- `retry_backoff_seconds` 是第一次失败后的等待秒数，之后按 `base * 2`、`base * 4` 递增。
+- HTTP `4xx`（除 `429` 外）、缺少 API key、配置非法和 Judge 输出 JSON 非法不会重试。
+
 ## 输出结果
 
 一次运行完成后，AgentBench 会输出 run 目录。
@@ -322,6 +436,11 @@ workspace_policy: all
 
 请查看对应 trial 的 `result.json`，其中 `score.notes` 会记录错误信息。
 
-### Judge 评分是否已经可用？
+### Judge 评分一直是 `scoring_error` 怎么办？
 
-当前 `JudgeScorer` 是占位实现。`rules` 评分可用于真实评测；`hybrid` 可以组合规则评分和 Judge 评分接口，但内置 Judge 执行器尚未接入外部模型服务。
+请先查看对应 trial 的 `result.json` 中的 `score.notes`。常见原因包括：
+
+- 当前工作目录没有 `.env`，或 `api_key_env` 指向的环境变量不存在。
+- `provider` 不是 `openai` 或 `anthropic`。
+- `temperature`、`max_retries`、`retry_backoff_seconds` 或上下文预算字段非法。
+- Judge 返回的内容不是合法 JSON，或分数不在 `0.0` 到 `1.0` 范围内。
