@@ -98,3 +98,36 @@ def test_build_judge_prompt_includes_execution_trace_and_workspace_files(tmp_pat
     assert "hidden dir secret" not in prompt
     assert "secret" not in prompt
     assert "bootstrap" not in prompt
+
+
+def test_parse_judge_scores_total_notes(tmp_path: Path):
+    scorer = JudgeScorer(make_judge_config())
+    result = scorer.parse_judge_text(
+        make_task(),
+        make_run(tmp_path, Trace()),
+        '{"scores": {"accuracy": 0.8, "style": 1.0}, "total": 0.9, "notes": "good"}',
+    )
+
+    assert result.status == "scored"
+    assert result.score == 0.9
+    assert result.passed is True
+    assert result.notes == "good"
+    assert [item.id for item in result.breakdown] == ["accuracy", "style"]
+
+
+def test_parse_judge_simplified_score_reason(tmp_path: Path):
+    scorer = JudgeScorer(make_judge_config())
+    result = scorer.parse_judge_text(make_task(), make_run(tmp_path, Trace()), '{"score": 0.7, "reason": "ok"}')
+
+    assert result.status == "scored"
+    assert result.score == 0.7
+    assert result.passed is False
+    assert result.notes == "ok"
+
+
+def test_parse_judge_invalid_output_is_scoring_error(tmp_path: Path):
+    scorer = JudgeScorer(make_judge_config())
+    result = scorer.parse_judge_text(make_task(), make_run(tmp_path, Trace()), "not json")
+
+    assert result.status == "scoring_error"
+    assert result.score == 0.0

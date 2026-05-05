@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agentbench.core.result import AgentRunResult, ScoreResult
+from agentbench.core.result import AgentRunResult, CheckResult, ScoreResult
 from agentbench.core.task import JudgeConfig, TaskSpec
 
 
@@ -64,6 +64,48 @@ class JudgeScorer:
             self._read_workspace_files(Path(run.workspace_path)),
         ]
         return self._truncate("\n".join(parts), self._max_context_chars())
+
+    def parse_judge_text(self, task: TaskSpec, run: AgentRunResult, text: str) -> ScoreResult:
+        """解析 Judge 返回的 JSON 文本为评分结果。"""
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return self._error(task, run, "judge output is not valid JSON")
+
+        if not isinstance(payload, dict):
+            return self._error(task, run, "judge output must be a JSON object")
+
+        total = self._extract_total(payload)
+        if total is None or not 0.0 <= total <= 1.0:
+            return self._error(task, run, "judge score must be between 0.0 and 1.0")
+
+        breakdown: list[CheckResult] = []
+        scores = payload.get("scores")
+        if isinstance(scores, dict):
+            try:
+                breakdown = [
+                    CheckResult(
+                        id=str(item_id),
+                        score=float(item_score),
+                        points=1.0,
+                        passed=float(item_score) >= task.pass_threshold,
+                        detail="",
+                    )
+                    for item_id, item_score in scores.items()
+                ]
+            except (TypeError, ValueError):
+                return self._error(task, run, "judge scores must be numeric")
+
+        notes = str(payload.get("notes", payload.get("reason", "")))
+        return ScoreResult(
+            task_id=task.id,
+            trial_id=run.trial_id,
+            status="scored",
+            score=total,
+            passed=total >= task.pass_threshold,
+            breakdown=breakdown,
+            notes=notes,
+        )
 
     def _summarize_trace(self, run: AgentRunResult) -> str:
         """把执行轨迹压缩为 Judge 可读的文本摘要。"""
@@ -142,6 +184,14 @@ class JudgeScorer:
     def _max_workspace_file_chars(self) -> int:
         """返回单个工作区文件最大字符数。"""
         return self.config.max_workspace_file_chars if self.config else 3000
+
+    def _extract_total(self, payload: dict) -> float | None:
+        """从推荐或简化 Judge JSON 结构中提取总分。"""
+        value = payload.get("total", payload.get("score"))
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     def _truncate(self, value: str, max_chars: int) -> str:
         """按字符数截断文本，并标记被截断的内容。"""
