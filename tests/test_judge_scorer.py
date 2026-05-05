@@ -268,3 +268,95 @@ def test_call_anthropic_messages_protocol(monkeypatch):
         },
         "timeout": 45,
     }
+
+
+def test_openai_retries_timeout_with_exponential_backoff(monkeypatch):
+    attempts = 0
+    sleeps = []
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"total": 0.8, "notes": "ok"}'}}]}
+
+    def fake_post(url, *, headers, json, timeout):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise requests.Timeout("timed out")
+        return Response()
+
+    monkeypatch.setenv("JUDGE_API_KEY", "test-key")
+    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setattr("agentbench.scorers.judge.time.sleep", lambda seconds: sleeps.append(seconds))
+    scorer = JudgeScorer(make_judge_config(api_key_env="JUDGE_API_KEY", max_retries=2, retry_backoff_seconds=0.5))
+
+    content = scorer.call_judge("system prompt", "user prompt")
+
+    assert content == '{"total": 0.8, "notes": "ok"}'
+    assert attempts == 3
+    assert sleeps == [0.5, 1.0]
+
+
+def test_openai_does_not_retry_http_400(monkeypatch):
+    attempts = 0
+
+    class Response:
+        status_code = 400
+
+        def raise_for_status(self):
+            raise requests.HTTPError("bad request", response=self)
+
+    def fake_post(url, *, headers, json, timeout):
+        nonlocal attempts
+        attempts += 1
+        return Response()
+
+    monkeypatch.setenv("JUDGE_API_KEY", "test-key")
+    monkeypatch.setattr(requests, "post", fake_post)
+    scorer = JudgeScorer(make_judge_config(api_key_env="JUDGE_API_KEY", max_retries=2, retry_backoff_seconds=0.5))
+
+    try:
+        scorer.call_judge("system prompt", "user prompt")
+    except requests.HTTPError:
+        pass
+
+    assert attempts == 1
+
+
+def test_openai_retries_http_429_once(monkeypatch):
+    attempts = 0
+    sleeps = []
+
+    class RateLimitResponse:
+        status_code = 429
+
+        def raise_for_status(self):
+            raise requests.HTTPError("rate limited", response=self)
+
+    class SuccessResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"total": 0.9, "notes": "ok"}'}}]}
+
+    def fake_post(url, *, headers, json, timeout):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return RateLimitResponse()
+        return SuccessResponse()
+
+    monkeypatch.setenv("JUDGE_API_KEY", "test-key")
+    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setattr("agentbench.scorers.judge.time.sleep", lambda seconds: sleeps.append(seconds))
+    scorer = JudgeScorer(make_judge_config(api_key_env="JUDGE_API_KEY", max_retries=1, retry_backoff_seconds=0.25))
+
+    content = scorer.call_judge("system prompt", "user prompt")
+
+    assert content == '{"total": 0.9, "notes": "ok"}'
+    assert attempts == 2
+    assert sleeps == [0.25]
