@@ -52,6 +52,16 @@ runs/20260505T145542Z-65147549
 - `logs/{task_id}/trial-{n}/trace.json`：标准化后的执行轨迹。
 - `workspaces/{task_id}/trial-{n}/`：按 `workspace_policy` 保留的工作区。
 
+### 运行 OpenClaw E2E 示例
+
+如果本机已经配置好 OpenClaw CLI，可以运行：
+
+```bash
+agentbench run --config examples/run.openclaw.yaml examples/tasks/openclaw_smoke.yaml
+```
+
+该示例使用 `minimax/MiniMax-M2.7`，会要求 OpenClaw 在 trial 工作区创建 `summary.md`，并用规则评分验证文件内容。
+
 ## 基本概念
 
 | 概念 | 说明 |

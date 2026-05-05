@@ -58,6 +58,16 @@ run:
 
 `fake` 适配器会模拟一次成功执行，并在 trial 工作区写入 `summary.md`。
 
+### OpenClaw E2E 示例
+
+如果本机已经配置好 OpenClaw CLI，可以运行内置 smoke case：
+
+```bash
+agentbench run --config examples/run.openclaw.yaml examples/tasks/openclaw_smoke.yaml
+```
+
+该示例使用 `minimax/MiniMax-M2.7`，会要求 OpenClaw 在当前 trial 工作区创建 `summary.md`，并用 `file_exists` 和 `file_contains` 规则验证结果。
+
 ## 运行配置
 
 运行配置文件描述一次评测的全局参数。

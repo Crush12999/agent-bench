@@ -1,0 +1,22 @@
+id: openclaw_smoke
+name: OpenClaw smoke
+timeout_seconds: 90
+pass_threshold: 1.0
+prompt: |
+  Create a file named summary.md in the current workspace.
+  The file must contain exactly this sentence: AgentBench OpenClaw smoke passed.
+scoring:
+  mode: rules
+  rules:
+    - id: summary_exists
+      type: file_exists
+      points: 1
+      params:
+        path: summary.md
+    - id: summary_contains
+      type: file_contains
+      points: 1
+      params:
+        path: summary.md
+        patterns:
+          - AgentBench OpenClaw smoke passed

@@ -1,0 +1,10 @@
+run:
+  adapter: openclaw
+  model: minimax/MiniMax-M2.7
+  trials: 1
+  parallelism: 1
+  output_dir: runs
+  workspace_policy: all
+  adapter_config:
+    openclaw_binary: openclaw
+    session_artifact_timeout_seconds: 15
