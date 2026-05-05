@@ -131,3 +131,19 @@ def test_parse_judge_invalid_output_is_scoring_error(tmp_path: Path):
 
     assert result.status == "scoring_error"
     assert result.score == 0.0
+
+
+def test_parse_judge_invalid_structure_is_scoring_error(tmp_path: Path):
+    scorer = JudgeScorer(make_judge_config())
+
+    for output in [
+        "[]",
+        '{"scores": [], "total": 0.8}',
+        '{"total": 1.2}',
+        '{"scores": {"accuracy": 2.0}, "total": 0.8}',
+        '{"notes": "missing total"}',
+    ]:
+        result = scorer.parse_judge_text(make_task(), make_run(tmp_path, Trace()), output)
+
+        assert result.status == "scoring_error"
+        assert result.score == 0.0

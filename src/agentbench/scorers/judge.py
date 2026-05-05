@@ -81,20 +81,25 @@ class JudgeScorer:
 
         breakdown: list[CheckResult] = []
         scores = payload.get("scores")
-        if isinstance(scores, dict):
+        if "scores" in payload:
+            if not isinstance(scores, dict):
+                return self._error(task, run, "judge scores must be an object")
             try:
-                breakdown = [
-                    CheckResult(
-                        id=str(item_id),
-                        score=float(item_score),
-                        points=1.0,
-                        passed=float(item_score) >= task.pass_threshold,
-                        detail="",
-                    )
-                    for item_id, item_score in scores.items()
-                ]
+                parsed_scores = [(str(item_id), float(item_score)) for item_id, item_score in scores.items()]
             except (TypeError, ValueError):
                 return self._error(task, run, "judge scores must be numeric")
+            if any(not 0.0 <= item_score <= 1.0 for _, item_score in parsed_scores):
+                return self._error(task, run, "judge scores must be between 0.0 and 1.0")
+            breakdown = [
+                CheckResult(
+                    id=item_id,
+                    score=item_score,
+                    points=1.0,
+                    passed=item_score >= task.pass_threshold,
+                    detail="",
+                )
+                for item_id, item_score in parsed_scores
+            ]
 
         notes = str(payload.get("notes", payload.get("reason", "")))
         return ScoreResult(
