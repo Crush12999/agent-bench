@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import requests
+
 from agentbench.core.result import AgentRunResult, CheckResult
 from agentbench.core.task import JudgeConfig, ScoringSpec, TaskSpec
 from agentbench.core.trace import Trace, TraceEvent
@@ -153,3 +155,52 @@ def test_parse_judge_invalid_structure_is_scoring_error(tmp_path: Path):
 
         assert result.status == "scoring_error"
         assert result.score == 0.0
+
+
+def test_call_openai_chat_completions_protocol(monkeypatch):
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"total": 0.8, "notes": "ok"}'}}]}
+
+    def fake_post(url, *, headers, json, timeout):
+        captured.update(url=url, headers=headers, json=json, timeout=timeout)
+        return Response()
+
+    monkeypatch.setenv("JUDGE_API_KEY", "test-key")
+    monkeypatch.setattr(requests, "post", fake_post)
+    scorer = JudgeScorer(
+        make_judge_config(
+            base_url="https://judge.example/v1/",
+            api_key_env="JUDGE_API_KEY",
+            model="judge-model",
+            temperature=0.2,
+            timeout_seconds=30,
+            max_tokens=256,
+        )
+    )
+
+    content = scorer.call_judge("system prompt", "user prompt")
+
+    assert content == '{"total": 0.8, "notes": "ok"}'
+    assert captured == {
+        "url": "https://judge.example/v1/chat/completions",
+        "headers": {
+            "Authorization": "Bearer test-key",
+            "Content-Type": "application/json",
+        },
+        "json": {
+            "model": "judge-model",
+            "messages": [
+                {"role": "system", "content": "system prompt"},
+                {"role": "user", "content": "user prompt"},
+            ],
+            "temperature": 0.2,
+            "max_tokens": 256,
+        },
+        "timeout": 30,
+    }

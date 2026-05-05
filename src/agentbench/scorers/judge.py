@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+
+import requests
 
 from agentbench.core.result import AgentRunResult, CheckResult, ScoreResult
 from agentbench.core.task import JudgeConfig, TaskSpec
@@ -20,17 +23,56 @@ _SKIPPED_FILES = {
 
 
 class JudgeScorer:
-    """Judge 评分器占位实现。"""
+    """Judge 评分器。"""
 
     def __init__(self, config: JudgeConfig | None = None) -> None:
-        """保存 Judge 配置，HTTP 调用由后续任务实现。"""
+        """保存 Judge 配置。"""
         self.config = config
 
     def score(self, task: TaskSpec, run: AgentRunResult) -> ScoreResult:
-        """返回 scoring_error，避免在未配置 Judge 执行器时误报已评分。"""
+        """调用 Judge 并解析评分结果。"""
         if not task.scoring.judge_rubric:
             return self._error(task, run, "judge_rubric missing")
-        return self._error(task, run, "judge execution is not configured")
+        if self.config is None:
+            return self._error(task, run, "judge execution is not configured")
+        if self.config.provider != "openai":
+            return self._error(task, run, f"unsupported judge provider: {self.config.provider}")
+        try:
+            text = self.call_judge(
+                "You are a grading function. Return only valid JSON.",
+                self.build_prompt(task, run),
+            )
+        except Exception as exc:
+            return self._error(task, run, str(exc))
+        return self.parse_judge_text(task, run, text)
+
+    def call_judge(self, system_prompt: str, user_prompt: str) -> str:
+        """调用 OpenAI-compatible chat completions API，并返回消息文本。"""
+        if self.config is None:
+            raise RuntimeError("judge execution is not configured")
+        api_key = os.environ.get(self.config.api_key_env)
+        if not api_key:
+            raise RuntimeError(f"missing API key environment variable: {self.config.api_key_env}")
+
+        response = requests.post(
+            f"{self.config.base_url.rstrip('/')}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": self.config.model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": self.config.temperature,
+                "max_tokens": self.config.max_tokens,
+            },
+            timeout=self.config.timeout_seconds,
+        )
+        response.raise_for_status()
+        return str(response.json()["choices"][0]["message"]["content"])
 
     def build_prompt(self, task: TaskSpec, run: AgentRunResult) -> str:
         """构造发送给 Judge 的任务、轨迹和工作区上下文。"""
