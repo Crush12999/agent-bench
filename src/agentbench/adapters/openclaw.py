@@ -17,6 +17,8 @@ from agentbench.core.trace import Trace, TraceEvent
 
 
 class OpenClawAgentLoop:
+    """通过 OpenClaw CLI 执行任务的 Agent 适配器。"""
+
     def __init__(
         self,
         openclaw_binary: str = "openclaw",
@@ -24,6 +26,7 @@ class OpenClawAgentLoop:
         state_dir: Path | None = None,
         session_artifact_timeout_seconds: int = 15,
     ) -> None:
+        """初始化 OpenClaw CLI 路径、模型、状态目录和 transcript 等待时间。"""
         self.openclaw_binary = openclaw_binary
         self.model = model
         self.state_dir = state_dir
@@ -31,6 +34,7 @@ class OpenClawAgentLoop:
         self.command_env = self._build_command_env()
 
     def preflight(self, config: RunConfig) -> PreflightResult:
+        """检查 OpenClaw CLI 是否可执行，并验证 agent 列表命令可用。"""
         try:
             result = subprocess.run(
                 [self.openclaw_binary, "agents", "list", "--json"],
@@ -45,6 +49,7 @@ class OpenClawAgentLoop:
         return PreflightResult(ok=result.returncode == 0, message=result.stderr.strip())
 
     def build_agent_command(self, agent_id: str, prompt: str, timeout_seconds: int) -> list[str]:
+        """构造单次 OpenClaw agent 执行命令。"""
         return [
             self.openclaw_binary,
             "agent",
@@ -65,6 +70,7 @@ class OpenClawAgentLoop:
         log_dir: Path,
         timeout_seconds: int,
     ) -> AgentRunResult:
+        """创建或复用 OpenClaw agent，执行任务并收集日志与 transcript。"""
         started_monotonic = time.monotonic()
         started = datetime.now(timezone.utc).isoformat()
         agent_id = self._agent_id(task.id, trial_id)
@@ -75,6 +81,7 @@ class OpenClawAgentLoop:
         error = None
         proc: subprocess.Popen[str] | None = None
         try:
+            # OpenClaw agent 与工作区绑定；trial 工作区变化时需要重建同名 agent。
             self.ensure_agent(agent_id, workspace, model=self.model)
             self.prepare_workspace(workspace)
             proc = subprocess.Popen(
@@ -125,6 +132,7 @@ class OpenClawAgentLoop:
         )
 
     def ensure_agent(self, agent_id: str, workspace: Path, model: str | None = None) -> None:
+        """确保 OpenClaw 中存在绑定到当前工作区和模型的 agent。"""
         workspace.mkdir(parents=True, exist_ok=True)
         existing_agents = self._list_existing_agents()
         normalized_id = self._normalize_agent_id(agent_id)
@@ -134,6 +142,7 @@ class OpenClawAgentLoop:
                 self._configure_models_json(agent_id, model)
                 self._delete_stale_sessions_store(agent_id)
                 return
+            # 同名 agent 指向旧工作区时先删除，避免 OpenClaw 把任务跑到过期目录。
             delete_name = normalized_id if normalized_id in existing_agents else agent_id
             delete_result = subprocess.run(
                 [self.openclaw_binary, "agents", "delete", delete_name, "--force"],
@@ -157,6 +166,7 @@ class OpenClawAgentLoop:
         self._delete_stale_sessions_store(agent_id)
 
     def prepare_workspace(self, workspace: Path) -> None:
+        """删除 OpenClaw 可能自动写入且会污染评测提示的启动文件。"""
         for bootstrap_file in ("BOOTSTRAP.md", "SOUL.md", "USER.md", "IDENTITY.md", "HEARTBEAT.md"):
             path = workspace / bootstrap_file
             if path.exists():
@@ -166,6 +176,7 @@ class OpenClawAgentLoop:
                     pass
 
     def load_trace(self, agent_id: str) -> Trace:
+        """等待并加载 OpenClaw 为指定 agent 写出的最新 transcript。"""
         sessions_dir = self.agent_sessions_dir(agent_id)
         deadline = time.monotonic() + self.session_artifact_timeout_seconds
         while time.monotonic() <= deadline:
@@ -176,6 +187,7 @@ class OpenClawAgentLoop:
         return Trace(events=[])
 
     def resolve_transcript_path(self, sessions_dir: Path, session_id: str) -> Path | None:
+        """从 session 元数据或目录中的最新文件解析 transcript 路径。"""
         if not sessions_dir.exists():
             return None
         for candidate_session_id in [session_id, *self._session_ids_from_metadata(sessions_dir)]:
@@ -210,6 +222,7 @@ class OpenClawAgentLoop:
                 if latest_file is not None:
                     return latest_file[1]
 
+        # sessions.json 缺失或不可用时，退回到目录内最新的 jsonl / ndjson 文件。
         candidates = sorted(
             [*sessions_dir.glob("*.jsonl"), *sessions_dir.glob("*.ndjson")],
             key=lambda path: path.stat().st_mtime,
@@ -218,6 +231,7 @@ class OpenClawAgentLoop:
         return candidates[0] if candidates else None
 
     def parse_transcript(self, path: Path) -> Trace:
+        """把 OpenClaw transcript 转换为 AgentBench 标准 Trace。"""
         events: list[TraceEvent] = []
         for line in path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
@@ -238,6 +252,7 @@ class OpenClawAgentLoop:
         return Trace(events=events)
 
     def _trace_event_from_message(self, raw: dict[str, Any]) -> TraceEvent | None:
+        """从 OpenClaw 原生 message 事件中提取 assistant 文本。"""
         message = raw.get("message")
         if not isinstance(message, dict) or message.get("role") != "assistant":
             return None
@@ -255,6 +270,7 @@ class OpenClawAgentLoop:
         return TraceEvent(type="assistant_message", timestamp=raw.get("timestamp"), data={"text": text, "raw": raw})
 
     def kill_process_group(self, proc: subprocess.Popen[str] | None) -> None:
+        """终止 OpenClaw 子进程及其进程组。"""
         if proc is None:
             return
         try:
@@ -267,19 +283,24 @@ class OpenClawAgentLoop:
                 pass
 
     def agent_sessions_dir(self, agent_id: str) -> Path:
+        """返回指定 agent 的 sessions 目录。"""
         return self._agent_store_dir(agent_id) / "sessions"
 
     def _agent_store_dir(self, agent_id: str) -> Path:
+        """返回 OpenClaw 存储指定 agent 状态的目录。"""
         base = Path(self.command_env["OPENCLAW_STATE_DIR"]) if self.state_dir is not None else Path.home() / ".openclaw"
         return base / "agents" / agent_id
 
     def _agent_id(self, task_id: str, trial_id: int) -> str:
+        """生成 AgentBench 专用的 OpenClaw agent id。"""
         return f"agentbench-{task_id}-trial-{trial_id}".replace("_", "-").lower()
 
     def _normalize_agent_id(self, agent_id: str) -> str:
+        """匹配 OpenClaw CLI 可能做过规范化处理的 agent id。"""
         return agent_id.replace(":", "-").lower()
 
     def _list_existing_agents(self) -> set[str]:
+        """读取 OpenClaw 已存在的 agent id 集合。"""
         json_payload = self._load_agents_json()
         if json_payload is not None:
             existing_agents: set[str] = set()
@@ -311,6 +332,7 @@ class OpenClawAgentLoop:
         return existing_agents
 
     def _get_agent_workspace(self, agent_id: str) -> Path | None:
+        """查询 OpenClaw 中某个 agent 当前绑定的工作区。"""
         json_payload = self._load_agents_json()
         normalized_id = self._normalize_agent_id(agent_id)
         if json_payload is not None:
@@ -352,6 +374,7 @@ class OpenClawAgentLoop:
         return None
 
     def _load_agents_json(self) -> list[dict[str, Any]] | None:
+        """优先通过 `openclaw agents list --json` 获取结构化 agent 列表。"""
         try:
             result = subprocess.run(
                 [self.openclaw_binary, "agents", "list", "--json"],
@@ -373,6 +396,7 @@ class OpenClawAgentLoop:
         return [item for item in payload if isinstance(item, dict)]
 
     def _session_ids_from_metadata(self, sessions_dir: Path) -> list[str]:
+        """从 sessions.json 中提取可能对应 transcript 文件名的 session id。"""
         sessions_path = sessions_dir / "sessions.json"
         if not sessions_path.exists():
             return []
@@ -395,6 +419,7 @@ class OpenClawAgentLoop:
         return ids
 
     def _configure_models_json(self, agent_id: str, model: str | None) -> None:
+        """把目标模型写入 OpenClaw agent 的 models.json。"""
         if not model:
             return
         agent_dir = self._agent_store_dir(agent_id) / "agent"
@@ -416,6 +441,7 @@ class OpenClawAgentLoop:
                 return
 
     def _delete_stale_sessions_store(self, agent_id: str) -> None:
+        """删除旧 sessions.json，避免 transcript 解析命中过期 session。"""
         sessions_store = self.agent_sessions_dir(agent_id) / "sessions.json"
         if sessions_store.exists():
             try:
@@ -424,6 +450,7 @@ class OpenClawAgentLoop:
                 return
 
     def _build_command_env(self) -> dict[str, str]:
+        """构造传给 OpenClaw 子进程的环境变量。"""
         env = dict(os.environ)
         if self.state_dir is not None:
             state_dir = str(self.state_dir)

@@ -9,7 +9,10 @@ from agentbench.core.task import RuleSpec, TaskSpec
 
 
 class RuleScorer:
+    """基于任务 YAML 中 rules 配置的确定性评分器。"""
+
     def score(self, task: TaskSpec, run: AgentRunResult) -> ScoreResult:
+        """执行所有规则，并把规则异常汇总为 scoring_error。"""
         checks = [self._score_rule(rule, run) for rule in task.scoring.rules]
         errors = [check.detail for check in checks if check.detail.startswith("scoring_error: ")]
         if errors:
@@ -35,6 +38,7 @@ class RuleScorer:
         )
 
     def _score_rule(self, rule: RuleSpec, run: AgentRunResult) -> CheckResult:
+        """执行单条规则，捕获异常并转成 CheckResult。"""
         try:
             matched, detail = self._evaluate(rule, run)
             return CheckResult(
@@ -48,6 +52,7 @@ class RuleScorer:
             return CheckResult(id=rule.id, score=0.0, points=rule.points, passed=False, detail=f"scoring_error: {exc}")
 
     def _evaluate(self, rule: RuleSpec, run: AgentRunResult) -> tuple[bool, str]:
+        """根据规则类型执行实际匹配逻辑。"""
         params = rule.params
         workspace = Path(run.workspace_path)
         if rule.type == "file_exists":
@@ -86,6 +91,7 @@ class RuleScorer:
 
 
 def _patterns(params: dict[str, Any]) -> list[str]:
+    """兼容 pattern 和 patterns 两种规则参数写法。"""
     if "patterns" in params:
         return [str(item) for item in params["patterns"]]
     return [str(params["pattern"])]

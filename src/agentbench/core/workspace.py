@@ -13,6 +13,8 @@ WorkspacePolicy = Literal["all", "failed", "none"]
 
 @dataclass(frozen=True)
 class TrialPaths:
+    """单个 trial 涉及的工作区、日志和结果文件路径。"""
+
     workspace_dir: Path
     log_dir: Path
     stdout_path: Path
@@ -23,11 +25,15 @@ class TrialPaths:
 
 
 class WorkspaceManager:
+    """负责创建 trial 工作区，并按策略清理运行产物。"""
+
     def __init__(self, run_dir: Path, policy: WorkspacePolicy = "failed") -> None:
+        """初始化工作区管理器。"""
         self.run_dir = run_dir
         self.policy = policy
 
     def prepare_trial(self, task: TaskSpec, trial_id: int) -> TrialPaths:
+        """创建 trial 工作区和日志目录，并复制任务声明的种子文件。"""
         workspace_dir = self.run_dir / "workspaces" / task.id / f"trial-{trial_id}"
         log_dir = self.run_dir / "logs" / task.id / f"trial-{trial_id}"
         workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -50,6 +56,7 @@ class WorkspaceManager:
         )
 
     def cleanup_trial(self, paths: TrialPaths, *, failed: bool) -> None:
+        """根据保留策略清理 trial 工作区。"""
         keep = self.policy == "all" or (self.policy == "failed" and failed)
         if keep:
             return

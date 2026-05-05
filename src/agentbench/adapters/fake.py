@@ -10,7 +10,10 @@ from agentbench.core.trace import Trace, TraceEvent
 
 
 class FakeAgentLoop:
+    """用于测试和示例的本地假 Agent 适配器。"""
+
     def preflight(self, config: RunConfig) -> PreflightResult:
+        """假适配器没有外部依赖，预检始终通过。"""
         return PreflightResult(ok=True)
 
     def run(
@@ -21,6 +24,7 @@ class FakeAgentLoop:
         log_dir: Path,
         timeout_seconds: int,
     ) -> AgentRunResult:
+        """写入固定输出，模拟一次成功的 Agent 执行。"""
         started = datetime.now(timezone.utc).isoformat()
         output = workspace / "summary.md"
         output.write_text(f"done {task.id}", encoding="utf-8")

@@ -8,6 +8,7 @@ from agentbench.core.result import ScoreResult
 
 
 def aggregate_scores(scores: list[ScoreResult]) -> dict[str, Any]:
+    """汇总一次评测运行中的所有得分，生成整体指标和按任务拆分的指标。"""
     by_task: dict[str, list[ScoreResult]] = defaultdict(list)
     for score in scores:
         by_task[score.task_id].append(score)

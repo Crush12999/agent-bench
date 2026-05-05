@@ -18,13 +18,17 @@ from agentbench.scorers.base import Scorer
 
 
 class Runner:
+    """编排一次完整评测运行，包括执行 trial、评分、清理和汇总。"""
+
     def __init__(self, config: RunConfig, agent_loop: AgentLoop, scorer: Scorer) -> None:
+        """注入运行配置、Agent 适配器和评分器。"""
         self.config = config
         self.agent_loop = agent_loop
         self.scorer = scorer
         self._write_lock = Lock()
 
     def run(self, tasks: list[TaskSpec]) -> dict[str, Any]:
+        """运行所有任务和 trial，并返回 run.json 的完整内容。"""
         preflight = self.agent_loop.preflight(self.config)
         if not preflight.ok:
             raise RuntimeError(preflight.message)
@@ -59,10 +63,12 @@ class Runner:
         task: TaskSpec,
         trial_id: int,
     ) -> tuple[AgentRunResult, ScoreResult, dict[str, Any], TrialPaths]:
+        """执行单个 trial，保证异常被转换为标准结果而不中断整次 run。"""
         paths = workspace_manager.prepare_trial(task, trial_id)
         try:
             run_result = self.agent_loop.run(task, trial_id, paths.workspace_dir, paths.log_dir, task.timeout_seconds)
         except Exception as exc:
+            # Agent 执行异常只影响当前 trial，不能阻断其他任务继续评测。
             now = datetime.now(timezone.utc).isoformat()
             error = str(exc)
             trace = Trace(events=[TraceEvent(type="error", data={"error": error})])
@@ -97,6 +103,7 @@ class Runner:
             try:
                 score_result = self.scorer.score(task, run_result)
             except Exception as exc:
+                # 评分异常保留原始运行结果，用 scoring_error 区分评测配置问题和 Agent 执行问题。
                 score_result = ScoreResult(
                     task_id=task.id,
                     trial_id=trial_id,

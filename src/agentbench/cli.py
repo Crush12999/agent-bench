@@ -12,12 +12,14 @@ from agentbench.scorers.rules import RuleScorer
 
 
 def load_tasks_from_path(path: str | Path) -> list[TaskSpec]:
+    """从单个 YAML 文件或目录批量加载任务。"""
     base = Path(path)
     files = sorted(base.glob("*.yaml")) if base.is_dir() else [base]
     return [load_task_spec(file) for file in files]
 
 
 def select_scorer(tasks: list[TaskSpec]):
+    """根据任务中声明的 scoring mode 选择评分器。"""
     modes = {task.scoring.mode for task in tasks}
     if "hybrid" in modes:
         return HybridScorer()
@@ -27,6 +29,7 @@ def select_scorer(tasks: list[TaskSpec]):
 
 
 def build_agent_loop(config: RunConfig):
+    """根据运行配置创建对应的 Agent 适配器。"""
     if config.adapter == "fake":
         return FakeAgentLoop()
     if config.adapter == "openclaw":
@@ -40,6 +43,7 @@ def build_agent_loop(config: RunConfig):
 
 
 def main(argv: list[str] | None = None) -> int:
+    """命令行入口。"""
     parser = argparse.ArgumentParser(prog="agentbench")
     sub = parser.add_subparsers(dest="command", required=True)
     run_parser = sub.add_parser("run")

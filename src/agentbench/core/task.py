@@ -14,12 +14,16 @@ JudgeMode = Literal["agent", "api"]
 
 @dataclass(frozen=True)
 class SeedFile:
+    """任务开始前需要复制进工作区的种子文件。"""
+
     source: str
     dest: str
 
 
 @dataclass(frozen=True)
 class RuleSpec:
+    """单条规则评分项的配置。"""
+
     id: str
     type: str
     points: float
@@ -28,6 +32,8 @@ class RuleSpec:
 
 @dataclass(frozen=True)
 class ScoringSpec:
+    """任务的评分方式和评分参数。"""
+
     mode: ScoringMode
     rules: list[RuleSpec] = field(default_factory=list)
     judge_rubric: str | None = None
@@ -36,6 +42,8 @@ class ScoringSpec:
 
 @dataclass(frozen=True)
 class TaskSpec:
+    """从任务 YAML 加载后的标准任务描述。"""
+
     id: str
     name: str
     prompt: str
@@ -49,12 +57,16 @@ class TaskSpec:
 
 @dataclass(frozen=True)
 class JudgeConfig:
+    """Judge 评分器的运行配置。"""
+
     mode: JudgeMode = "agent"
     model: str | None = None
 
 
 @dataclass(frozen=True)
 class RunConfig:
+    """一次评测运行的全局配置。"""
+
     adapter: str
     model: str
     trials: int = 1
@@ -66,6 +78,7 @@ class RunConfig:
 
 
 def load_task_spec(path: str | Path) -> TaskSpec:
+    """从任务 YAML 文件加载并规范化任务配置。"""
     task_path = Path(path)
     raw = yaml.safe_load(task_path.read_text(encoding="utf-8")) or {}
     scoring_raw = raw.get("scoring") or {}
@@ -101,6 +114,7 @@ def load_task_spec(path: str | Path) -> TaskSpec:
 
 
 def load_run_config(path: str | Path) -> RunConfig:
+    """从运行配置 YAML 文件加载并规范化运行配置。"""
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     run = raw.get("run") or raw
     judge_raw = run.get("judge")

@@ -12,6 +12,8 @@ ScoreStatus = Literal["scored", "scoring_error", "skipped"]
 
 @dataclass(frozen=True)
 class AgentRunResult:
+    """Agent 执行一个 trial 后产生的运行结果。"""
+
     task_id: str
     trial_id: int
     status: RunStatus
@@ -29,6 +31,7 @@ class AgentRunResult:
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        """转换为可写入 result.json 的字典。"""
         return {
             "task_id": self.task_id,
             "trial_id": self.trial_id,
@@ -50,6 +53,8 @@ class AgentRunResult:
 
 @dataclass(frozen=True)
 class CheckResult:
+    """单条评分规则的检查结果。"""
+
     id: str
     score: float
     points: float
@@ -57,6 +62,7 @@ class CheckResult:
     detail: str
 
     def to_dict(self) -> dict[str, Any]:
+        """转换为可写入 result.json 的字典。"""
         return {
             "id": self.id,
             "score": self.score,
@@ -68,6 +74,8 @@ class CheckResult:
 
 @dataclass(frozen=True)
 class ScoreResult:
+    """一个 trial 的最终评分结果。"""
+
     task_id: str
     trial_id: int
     status: ScoreStatus
@@ -77,6 +85,7 @@ class ScoreResult:
     notes: str = ""
 
     def to_dict(self) -> dict[str, Any]:
+        """转换为可写入 result.json 的字典。"""
         return {
             "task_id": self.task_id,
             "trial_id": self.trial_id,
