@@ -19,6 +19,17 @@ class HybridScorer:
         """按任务配置的权重合并规则分和 Judge 分。"""
         rule_result = self.rule_scorer.score(task, run)
         judge_result = self.judge_scorer.score(task, run)
+        errors = [result.notes for result in (rule_result, judge_result) if result.status != "scored"]
+        if errors:
+            return ScoreResult(
+                task_id=task.id,
+                trial_id=run.trial_id,
+                status="scoring_error",
+                score=0.0,
+                passed=False,
+                breakdown=[*rule_result.breakdown, *judge_result.breakdown],
+                notes="; ".join(note for note in errors if note),
+            )
         weights = task.scoring.weights or {"rules": 0.7, "judge": 0.3}
         rule_weight = float(weights.get("rules", 0.7))
         judge_weight = float(weights.get("judge", 0.3))
