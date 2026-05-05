@@ -13,7 +13,8 @@ AgentBench 当前已经支持规则评分（`rules`）和混合评分（`hybrid`
 - 支持 OpenAI-compatible Chat Completions 协议。
 - 支持 Anthropic Messages API 协议。
 - 支持 run 级 Judge 配置，包括 provider、model、base_url、api_key_env、temperature、timeout_seconds 和 max_tokens。
-- 自动加载项目根目录下的 `.env`，让开源用户可以通过 `.env` 提供 API key。
+- 自动加载执行 `agentbench run` 时当前工作目录下的 `.env`，让开源用户可以通过 `.env` 提供 API key。
+- Judge 输入包含 Agent 执行过程摘要、工具调用、工具结果预览和工作区文本产物，而不是只依赖最终 assistant 文本。
 - Judge 输出解析为标准 `ScoreResult`，错误统一标记为 `scoring_error`。
 - 使用 `requests` 发起 HTTP 请求，不使用 `urllib.request`。
 
@@ -82,8 +83,11 @@ run:
 | `temperature` | number | 否 | `0.0` | Judge 采样温度，建议评测场景保持 `0`。 |
 | `timeout_seconds` | integer | 否 | `60` | HTTP 请求超时时间。 |
 | `max_tokens` | integer | 否 | `512` | Judge 响应最大 token 数。 |
+| `max_context_chars` | integer | 否 | `20000` | 传给 Judge 的评测上下文最大字符数。 |
+| `max_tool_result_chars` | integer | 否 | `1000` | 单条工具结果预览最大字符数。 |
+| `max_workspace_file_chars` | integer | 否 | `3000` | 单个工作区文本文件内容最大字符数。 |
 
-`temperature` 的合法范围为 `0.0` 到 `2.0`。`timeout_seconds` 和 `max_tokens` 必须为正数。配置非法时，评分结果应返回 `scoring_error`。
+`temperature` 的合法范围为 `0.0` 到 `2.0`。`timeout_seconds`、`max_tokens`、`max_context_chars`、`max_tool_result_chars` 和 `max_workspace_file_chars` 必须为正数。配置非法时，评分结果应返回 `scoring_error`。
 
 ## `.env` 加载规则
 
@@ -148,37 +152,118 @@ scoring:
 
 ## Judge 输入内容
 
-JudgeScorer 应构造一个评分 prompt，包含：
+JudgeScorer 应参考 `skill/scripts/lib_grading.py` 中 `llm_judge` 的做法，构造一个能反映 Agent 执行全过程的评分 prompt。Judge 输入不应只包含最终 assistant 文本。
+
+Prompt 至少包含：
 
 - 任务 ID 和任务名称。
 - 原始任务 prompt。
 - `judge_rubric`。
-- Agent 的 assistant message 文本。
-- 工作区内可用于评分的核心输出提示。
+- Agent 执行状态（例如 `success`、`timeout`、`error`）。
+- Agent transcript 摘要。
+- 工具调用名称和参数预览。
+- 工具执行结果预览。
+- assistant 文本消息摘要。
+- trial 工作区中 Agent 产出的文本文件内容预览。
 
-第一版不扫描整个工作区，不自动上传文件内容。Judge 主要基于标准 trace 中的 assistant message 评分。规则评分仍用于检查文件存在、文件内容和工具调用等确定性条件。
+### Transcript 摘要
 
-如果任务希望 Judge 评估文件内容，Agent 的最终响应应概述输出内容，或配合规则评分检查文件结果。后续版本可以单独设计「可显式声明待评审文件」能力。
+AgentBench 标准 `Trace` 当前包含 `assistant_message`、`tool_call`、`tool_result`、`file_event` 和 `error`。JudgeScorer 需要把这些事件转成可读摘要：
+
+| Trace 事件 | Judge 摘要 |
+| --- | --- |
+| `assistant_message` | `Assistant: <text>` |
+| `tool_call` | `Tool: <tool>(<args JSON preview>)` |
+| `tool_result` | `Result: <result preview>` |
+| `file_event` | `File event: <event JSON preview>` |
+| `error` | `Error: <error preview>` |
+
+截断规则：
+
+- 单条 assistant 文本最多保留 `2000` 字符。
+- 单个工具参数字符串最多保留 `200` 字符。
+- 单条工具结果最多保留 `max_tool_result_chars` 字符。
+- 单条 error / file event 最多保留 `1000` 字符。
+- 所有摘要拼接后仍受 `max_context_chars` 总预算限制。
+
+### 工作区文本产物
+
+JudgeScorer 应读取 trial 工作区中的用户产出文本文件，作为补充评分证据。这样 Judge 可以直接检查 Agent 写出的报告、摘要、配置或代码片段，而不是依赖 Agent 自己声称完成了什么。
+
+读取规则：
+
+- 只读取 `run.workspace_path` 下的文件。
+- 跳过隐藏目录和隐藏文件。
+- 跳过 `.git`、`.openclaw`、`__pycache__`、`node_modules`、`skills` 等目录。
+- 跳过 OpenClaw 启动文件：`BOOTSTRAP.md`、`SOUL.md`、`USER.md`、`IDENTITY.md`、`HEARTBEAT.md`、`TOOLS.md`、`AGENTS.md`。
+- 只读取可用 UTF-8 解码的文本文件。
+- 单个文件最多保留 `max_workspace_file_chars` 字符。
+- 每个文件用 `### File: <relative path>` 标记。
+- 工作区内容与 transcript 摘要合并后仍受 `max_context_chars` 总预算限制。
+
+### 上下文预算
+
+为了避免把大型工具结果或文件完整塞进 Judge 请求，第一版采用字符预算控制：
+
+- 默认 `max_context_chars = 20000`。
+- 先保留任务信息和 rubric。
+- 再加入 transcript 摘要。
+- 最后加入工作区文本产物。
+- 如果超出预算，截断后追加 `...[truncated]` 标记。
+
+这个策略保证 Judge 至少能看到任务和评分标准，同时尽量保留执行过程与产物证据。
+
+### Prompt 结构
+
+Prompt 应明确要求 Judge 不使用工具、不输出额外文本，并严格返回 JSON。建议结构：
+
+```text
+You are a grading function. Your ONLY job is to output a single JSON object.
+
+CRITICAL RULES:
+- Do NOT use tools.
+- Do NOT write prose outside JSON.
+- Be strict. Reserve 1.0 for genuinely excellent performance.
+
+## Task
+...
+
+## Execution Status
+...
+
+## Agent Transcript Summary
+...
+
+## Workspace Files Created by Agent
+...
+
+## Grading Rubric
+...
+
+Respond with ONLY this JSON structure:
+{"scores": {"criterion_name": 0.0}, "total": 0.0, "notes": "brief justification"}
+```
 
 ## Judge 输出协议
 
-Judge 模型必须返回 JSON 对象：
+Judge 模型必须返回 JSON 对象。推荐结构：
 
 ```json
 {
-  "score": 0.0,
-  "passed": false,
-  "reason": "简短说明"
+  "scores": {"criterion_name": 0.0},
+  "total": 0.0,
+  "notes": "简短说明"
 }
 ```
 
 解析规则：
 
-- `score` 必须是 `0.0` 到 `1.0` 的数字。
-- `passed` 可以存在，但最终通过判定以 `score >= task.pass_threshold` 为准。
-- `reason` 写入 `ScoreResult.notes`。
-- 允许响应外层是纯 JSON 字符串；不支持 Markdown 代码块作为第一版要求。
-- JSON 解析失败、缺少 `score`、`score` 越界或 HTTP 请求失败，均返回 `status="scoring_error"`，分数为 `0.0`。
+- `total` 必须是 `0.0` 到 `1.0` 的数字。
+- `scores` 是可选明细，若存在则转换为 `CheckResult` 或写入 breakdown。
+- `notes` 写入 `ScoreResult.notes`。
+- 为兼容不同模型，可以额外接受简化结构：`{"score": 0.8, "reason": "..."}`，并规范化为 `total` / `notes`。
+- 最终通过判定以 `total >= task.pass_threshold` 为准。
+- JSON 解析失败、缺少可用总分、总分越界或 HTTP 请求失败，均返回 `status="scoring_error"`，分数为 `0.0`。
 
 ## HTTP 协议设计
 
@@ -260,6 +345,7 @@ JudgeScorer 不应抛出未捕获异常给 Runner。以下情况统一转为 `Sc
 - `model` 缺失。
 - `api_key_env` 对应环境变量不存在。
 - `temperature`、`timeout_seconds` 或 `max_tokens` 非法。
+- `max_context_chars`、`max_tool_result_chars` 或 `max_workspace_file_chars` 非法。
 - HTTP 请求异常。
 - HTTP 状态码不是 2xx。
 - 响应 JSON 结构不符合预期。
@@ -292,11 +378,14 @@ tests/test_cli.py                    # CLI 装配测试
 - `.env` 文件不存在时不报错。
 - `.env` 能加载 key-value，且不覆盖已有环境变量。
 - `load_run_config()` 能加载完整 Judge 配置和默认值。
+- Judge prompt 包含 assistant message、tool call、tool result、file event、error 和 workspace 文本产物。
+- Judge prompt 对工具参数、工具结果和工作区文件内容执行截断。
 - OpenAI provider 构造正确 endpoint、headers 和 payload。
 - Anthropic provider 构造正确 endpoint、headers 和 payload。
 - `temperature` 传入请求体。
-- OpenAI 响应能解析为 `ScoreResult(status="scored")`。
-- Anthropic 响应能解析为 `ScoreResult(status="scored")`。
+- OpenAI 响应中的 `scores` / `total` 能解析为 `ScoreResult(status="scored")`。
+- Anthropic 响应中的 `scores` / `total` 能解析为 `ScoreResult(status="scored")`。
+- 简化响应 `score` / `reason` 能被规范化。
 - Judge score 低于 `pass_threshold` 时 `passed=False`。
 - 缺少 API key、HTTP 非 2xx、输出非 JSON、score 越界时返回 `scoring_error`。
 - `HybridScorer` 使用配置后的 JudgeScorer。
@@ -312,6 +401,8 @@ tests/test_cli.py                    # CLI 装配测试
 - OpenAI-compatible 配置示例。
 - Anthropic 配置示例。
 - Judge 任务 YAML 示例。
+- Judge 输入上下文包含 transcript 摘要、工具调用、工具结果和工作区文本文件。
+- 上下文长度控制字段说明。
 - 常见错误说明。
 
 开发文档需要补充：
@@ -326,7 +417,8 @@ tests/test_cli.py                    # CLI 装配测试
 - `agentbench run` 在 `scoring.mode: judge` 任务中能使用 mock 测试覆盖 Judge 评分路径。
 - OpenAI-compatible 请求符合 Chat Completions 基本协议。
 - Anthropic 请求符合 Messages API 基本协议。
-- `.env` 自动加载生效。
+- Judge 输入包含 Agent 执行过程和工作区产物，并有明确截断策略。
+- 当前工作目录下的 `.env` 自动加载生效。
 - 文档覆盖用户运行和二次开发所需信息。
 - 不引入明文 `api_key` 配置。
 - 不引入自动重试、流式响应或任务级 Judge 配置。
