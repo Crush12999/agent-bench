@@ -72,10 +72,19 @@ def test_build_judge_prompt_includes_execution_trace_and_workspace_files(tmp_pat
 
     prompt = scorer.build_prompt(make_task(), make_run(tmp_path, trace))
 
+    assert "You are a grading function. Your ONLY job is to output a single JSON object." in prompt
+    assert "CRITICAL RULES:" in prompt
+    assert "Do NOT use tools." in prompt
+    assert "Do NOT write prose outside JSON." in prompt
+    assert "Respond with ONLY this JSON structure:" in prompt
+    assert '{"scores": {"criterion_name": 0.0}, "total": 0.0, "notes": "brief justification"}' in prompt
     assert "## Task" in prompt
     assert "Write a concise summary." in prompt
+    assert "## Grading Rubric" in prompt
+    assert "Score accuracy and concision." in prompt
     assert "## Execution Status" in prompt
     assert "success" in prompt
+    assert "## Agent Transcript Summary" in prompt
     assert "Assistant: I will inspect the file." in prompt
     assert "Tool: read(" in prompt
     assert "...[truncated]" in prompt
