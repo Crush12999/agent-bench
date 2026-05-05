@@ -9,7 +9,7 @@ import yaml
 
 WorkspacePolicy = Literal["all", "failed", "none"]
 ScoringMode = Literal["rules", "judge", "hybrid"]
-JudgeMode = Literal["agent", "api"]
+JudgeProvider = Literal["openai", "anthropic"]
 
 
 @dataclass(frozen=True)
@@ -59,8 +59,18 @@ class TaskSpec:
 class JudgeConfig:
     """Judge 评分器的运行配置。"""
 
-    mode: JudgeMode = "agent"
-    model: str | None = None
+    provider: JudgeProvider
+    model: str
+    base_url: str
+    api_key_env: str
+    temperature: float = 0.0
+    timeout_seconds: int = 60
+    max_tokens: int = 512
+    max_context_chars: int = 20000
+    max_tool_result_chars: int = 1000
+    max_workspace_file_chars: int = 3000
+    max_retries: int = 2
+    retry_backoff_seconds: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -113,12 +123,40 @@ def load_task_spec(path: str | Path) -> TaskSpec:
     )
 
 
+def _load_judge_config(raw: dict[str, Any] | None) -> JudgeConfig | None:
+    if raw is None:
+        return None
+
+    provider = str(raw["provider"])
+    default_base_urls = {
+        "openai": "https://api.openai.com/v1",
+        "anthropic": "https://api.anthropic.com",
+    }
+    default_api_key_envs = {
+        "openai": "OPENAI_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+    }
+    return JudgeConfig(
+        provider=provider,
+        model=str(raw["model"]),
+        base_url=str(raw.get("base_url", default_base_urls.get(provider, ""))),
+        api_key_env=str(raw.get("api_key_env", default_api_key_envs.get(provider, ""))),
+        temperature=float(raw.get("temperature", 0.0)),
+        timeout_seconds=int(raw.get("timeout_seconds", 60)),
+        max_tokens=int(raw.get("max_tokens", 512)),
+        max_context_chars=int(raw.get("max_context_chars", 20000)),
+        max_tool_result_chars=int(raw.get("max_tool_result_chars", 1000)),
+        max_workspace_file_chars=int(raw.get("max_workspace_file_chars", 3000)),
+        max_retries=int(raw.get("max_retries", 2)),
+        retry_backoff_seconds=float(raw.get("retry_backoff_seconds", 1.0)),
+    )
+
+
 def load_run_config(path: str | Path) -> RunConfig:
     """从运行配置 YAML 文件加载并规范化运行配置。"""
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     run = raw.get("run") or raw
-    judge_raw = run.get("judge")
-    judge = JudgeConfig(mode=judge_raw.get("mode", "agent"), model=judge_raw.get("model")) if judge_raw else None
+    judge = _load_judge_config(run.get("judge"))
     return RunConfig(
         adapter=str(run["adapter"]),
         model=str(run["model"]),
