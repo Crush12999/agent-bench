@@ -157,6 +157,16 @@ def test_parse_judge_invalid_structure_is_scoring_error(tmp_path: Path):
         assert result.score == 0.0
 
 
+def test_score_supports_anthropic_provider(monkeypatch, tmp_path: Path):
+    scorer = JudgeScorer(make_judge_config(provider="anthropic"))
+    monkeypatch.setattr(scorer, "call_judge", lambda system_prompt, user_prompt: '{"total": 0.8, "notes": "ok"}')
+
+    result = scorer.score(make_task(), make_run(tmp_path, Trace()))
+
+    assert result.status == "scored"
+    assert result.score == 0.8
+
+
 def test_call_openai_chat_completions_protocol(monkeypatch):
     captured = {}
 
@@ -203,4 +213,58 @@ def test_call_openai_chat_completions_protocol(monkeypatch):
             "max_tokens": 256,
         },
         "timeout": 30,
+    }
+
+
+def test_call_anthropic_messages_protocol(monkeypatch):
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "content": [
+                    {"type": "tool_use", "name": "ignored"},
+                    {"type": "text", "text": '{"total": 0.9, "notes": "great"}'},
+                ]
+            }
+
+    def fake_post(url, *, headers, json, timeout):
+        captured.update(url=url, headers=headers, json=json, timeout=timeout)
+        return Response()
+
+    monkeypatch.setenv("JUDGE_API_KEY", "anthropic-key")
+    monkeypatch.setattr(requests, "post", fake_post)
+    scorer = JudgeScorer(
+        make_judge_config(
+            provider="anthropic",
+            base_url="https://judge.example/",
+            api_key_env="JUDGE_API_KEY",
+            model="claude-judge",
+            temperature=0.3,
+            timeout_seconds=45,
+            max_tokens=128,
+        )
+    )
+
+    content = scorer.call_judge("system prompt", "user prompt")
+
+    assert content == '{"total": 0.9, "notes": "great"}'
+    assert captured == {
+        "url": "https://judge.example/v1/messages",
+        "headers": {
+            "x-api-key": "anthropic-key",
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        },
+        "json": {
+            "model": "claude-judge",
+            "system": "system prompt",
+            "messages": [{"role": "user", "content": "user prompt"}],
+            "temperature": 0.3,
+            "max_tokens": 128,
+        },
+        "timeout": 45,
     }

@@ -35,7 +35,7 @@ class JudgeScorer:
             return self._error(task, run, "judge_rubric missing")
         if self.config is None:
             return self._error(task, run, "judge execution is not configured")
-        if self.config.provider != "openai":
+        if self.config.provider not in {"openai", "anthropic"}:
             return self._error(task, run, f"unsupported judge provider: {self.config.provider}")
         try:
             text = self.call_judge(
@@ -47,12 +47,21 @@ class JudgeScorer:
         return self.parse_judge_text(task, run, text)
 
     def call_judge(self, system_prompt: str, user_prompt: str) -> str:
-        """调用 OpenAI-compatible chat completions API，并返回消息文本。"""
+        """调用配置的 Judge API，并返回消息文本。"""
         if self.config is None:
             raise RuntimeError("judge execution is not configured")
         api_key = os.environ.get(self.config.api_key_env)
         if not api_key:
             raise RuntimeError(f"missing API key environment variable: {self.config.api_key_env}")
+
+        if self.config.provider == "anthropic":
+            return self._call_anthropic(system_prompt, user_prompt, api_key)
+        return self._call_openai(system_prompt, user_prompt, api_key)
+
+    def _call_openai(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
+        """调用 OpenAI-compatible chat completions API。"""
+        if self.config is None:
+            raise RuntimeError("judge execution is not configured")
 
         response = requests.post(
             f"{self.config.base_url.rstrip('/')}/chat/completions",
@@ -73,6 +82,31 @@ class JudgeScorer:
         )
         response.raise_for_status()
         return str(response.json()["choices"][0]["message"]["content"])
+
+    def _call_anthropic(self, system_prompt: str, user_prompt: str, api_key: str) -> str:
+        """调用 Anthropic messages API。"""
+        if self.config is None:
+            raise RuntimeError("judge execution is not configured")
+
+        response = requests.post(
+            f"{self.config.base_url.rstrip('/')}/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": self.config.model,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": user_prompt}],
+                "temperature": self.config.temperature,
+                "max_tokens": self.config.max_tokens,
+            },
+            timeout=self.config.timeout_seconds,
+        )
+        response.raise_for_status()
+        content = response.json()["content"]
+        return str(next(item["text"] for item in content if item["type"] == "text"))
 
     def build_prompt(self, task: TaskSpec, run: AgentRunResult) -> str:
         """构造发送给 Judge 的任务、轨迹和工作区上下文。"""
