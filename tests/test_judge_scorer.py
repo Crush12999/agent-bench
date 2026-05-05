@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import pytest
 import requests
 
 from agentbench.core.result import AgentRunResult, CheckResult
@@ -165,6 +166,88 @@ def test_score_supports_anthropic_provider(monkeypatch, tmp_path: Path):
 
     assert result.status == "scored"
     assert result.score == 0.8
+
+
+@pytest.mark.parametrize(
+    ("override", "expected_note"),
+    [
+        ({"temperature": -0.1}, "temperature must be between 0.0 and 2.0"),
+        ({"temperature": 2.1}, "temperature must be between 0.0 and 2.0"),
+        ({"timeout_seconds": 0}, "timeout_seconds must be positive"),
+        ({"max_tokens": 0}, "max_tokens must be positive"),
+        ({"max_context_chars": 0}, "max_context_chars must be positive"),
+        ({"max_tool_result_chars": 0}, "max_tool_result_chars must be positive"),
+        ({"max_workspace_file_chars": 0}, "max_workspace_file_chars must be positive"),
+        ({"max_retries": 0}, "max_retries must be between 1 and 5"),
+        ({"max_retries": 6}, "max_retries must be between 1 and 5"),
+        ({"retry_backoff_seconds": 0}, "retry_backoff_seconds must be positive"),
+    ],
+)
+def test_score_invalid_judge_config_is_scoring_error(override, expected_note, tmp_path: Path):
+    scorer = JudgeScorer(make_judge_config(**override))
+
+    result = scorer.score(make_task(), make_run(tmp_path, Trace()))
+
+    assert result.status == "scoring_error"
+    assert result.score == 0.0
+    assert result.passed is False
+    assert expected_note in result.notes
+
+
+def test_score_missing_api_key_is_scoring_error(monkeypatch, tmp_path: Path):
+    monkeypatch.delenv("MISSING_JUDGE_API_KEY", raising=False)
+    scorer = JudgeScorer(make_judge_config(api_key_env="MISSING_JUDGE_API_KEY"))
+
+    result = scorer.score(make_task(), make_run(tmp_path, Trace()))
+
+    assert result.status == "scoring_error"
+    assert result.score == 0.0
+    assert result.passed is False
+    assert "MISSING_JUDGE_API_KEY" in result.notes
+
+
+def test_score_unsupported_provider_is_scoring_error(tmp_path: Path):
+    scorer = JudgeScorer(make_judge_config(provider="local"))
+
+    result = scorer.score(make_task(), make_run(tmp_path, Trace()))
+
+    assert result.status == "scoring_error"
+    assert result.score == 0.0
+    assert result.passed is False
+    assert "unsupported judge provider: local" in result.notes
+
+
+def test_score_openai_protocol_response_missing_content_is_scoring_error(monkeypatch, tmp_path: Path):
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {}}]}
+
+    monkeypatch.setenv("JUDGE_API_KEY", "test-key")
+    monkeypatch.setattr(requests, "post", lambda url, *, headers, json, timeout: Response())
+    scorer = JudgeScorer(make_judge_config(api_key_env="JUDGE_API_KEY"))
+
+    result = scorer.score(make_task(), make_run(tmp_path, Trace()))
+
+    assert result.status == "scoring_error"
+    assert result.score == 0.0
+    assert result.passed is False
+    assert "content" in result.notes
+
+
+def test_score_invalid_judge_json_is_scoring_error(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("JUDGE_API_KEY", "test-key")
+    scorer = JudgeScorer(make_judge_config(api_key_env="JUDGE_API_KEY"))
+    monkeypatch.setattr(scorer, "call_judge", lambda system_prompt, user_prompt: "not json")
+
+    result = scorer.score(make_task(), make_run(tmp_path, Trace()))
+
+    assert result.status == "scoring_error"
+    assert result.score == 0.0
+    assert result.passed is False
+    assert "not valid JSON" in result.notes
 
 
 def test_call_openai_chat_completions_protocol(monkeypatch):

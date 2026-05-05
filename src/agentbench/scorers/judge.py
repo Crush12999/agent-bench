@@ -39,6 +39,9 @@ class JudgeScorer:
             return self._error(task, run, "judge execution is not configured")
         if self.config.provider not in {"openai", "anthropic"}:
             return self._error(task, run, f"unsupported judge provider: {self.config.provider}")
+        config_error = self._validate_config()
+        if config_error:
+            return self._error(task, run, config_error)
         try:
             text = self.call_judge(
                 "You are a grading function. Return only valid JSON.",
@@ -146,6 +149,27 @@ class JudgeScorer:
         response = exc.response
         status_code = response.status_code if response is not None else None
         return status_code == 429 or (status_code is not None and 500 <= status_code <= 599)
+
+    def _validate_config(self) -> str | None:
+        """返回 Judge 配置错误说明；合法时返回 None。"""
+        if self.config is None:
+            return "judge execution is not configured"
+        if not 0.0 <= self.config.temperature <= 2.0:
+            return "temperature must be between 0.0 and 2.0"
+        for field_name in (
+            "timeout_seconds",
+            "max_tokens",
+            "max_context_chars",
+            "max_tool_result_chars",
+            "max_workspace_file_chars",
+        ):
+            if getattr(self.config, field_name) <= 0:
+                return f"{field_name} must be positive"
+        if not 1 <= self.config.max_retries <= 5:
+            return "max_retries must be between 1 and 5"
+        if self.config.retry_backoff_seconds <= 0:
+            return "retry_backoff_seconds must be positive"
+        return None
 
     def build_prompt(self, task: TaskSpec, run: AgentRunResult) -> str:
         """构造发送给 Judge 的任务、轨迹和工作区上下文。"""
