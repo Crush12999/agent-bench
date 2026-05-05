@@ -124,15 +124,22 @@ class JudgeScorer:
                 response.raise_for_status()
                 return response
             except requests.HTTPError as exc:
-                if not self._is_retryable_http_error(exc) or attempt == max_retries:
+                if not self._is_retryable_http_error(exc):
                     raise
+                if attempt == max_retries:
+                    self._raise_retry_exhausted(exc, attempt, max_retries)
             except (requests.ConnectionError, requests.Timeout) as exc:
                 if attempt == max_retries:
-                    raise
+                    self._raise_retry_exhausted(exc, attempt, max_retries)
 
             time.sleep(self.config.retry_backoff_seconds * (2**attempt))
 
         raise RuntimeError("judge request retry loop exited unexpectedly")
+
+    def _raise_retry_exhausted(self, exc: Exception, attempt: int, max_retries: int) -> None:
+        """在可重试错误耗尽时补充尝试次数上下文。"""
+        attempts = max_retries + 1
+        raise RuntimeError(f"judge request failed after {attempts} attempts (max_retries={max_retries}): {exc}") from exc
 
     def _is_retryable_http_error(self, exc: requests.HTTPError) -> bool:
         """判断 HTTP 错误是否属于 Judge API 可重试状态码。"""

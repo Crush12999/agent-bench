@@ -360,3 +360,25 @@ def test_openai_retries_http_429_once(monkeypatch):
     assert content == '{"total": 0.9, "notes": "ok"}'
     assert attempts == 2
     assert sleeps == [0.25]
+
+
+def test_openai_retry_exhaustion_reports_attempt_count(monkeypatch, tmp_path: Path):
+    attempts = 0
+
+    def fake_post(url, *, headers, json, timeout):
+        nonlocal attempts
+        attempts += 1
+        raise requests.Timeout("timed out")
+
+    monkeypatch.setenv("JUDGE_API_KEY", "test-key")
+    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setattr("agentbench.scorers.judge.time.sleep", lambda seconds: None)
+    scorer = JudgeScorer(make_judge_config(api_key_env="JUDGE_API_KEY", max_retries=2, retry_backoff_seconds=0.1))
+
+    result = scorer.score(make_task(), make_run(tmp_path, Trace()))
+
+    assert result.status == "scoring_error"
+    assert attempts == 3
+    assert "failed after 3 attempts" in result.notes
+    assert "max_retries=2" in result.notes
+    assert "timed out" in result.notes
