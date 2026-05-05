@@ -7,7 +7,9 @@ from agentbench.adapters.fake import FakeAgentLoop
 from agentbench.adapters.openclaw import OpenClawAgentLoop
 from agentbench.core.runner import Runner
 from agentbench.core.task import RunConfig, TaskSpec, load_run_config, load_task_spec
+from agentbench.env import load_dotenv
 from agentbench.scorers.hybrid import HybridScorer
+from agentbench.scorers.judge import JudgeScorer
 from agentbench.scorers.rules import RuleScorer
 
 
@@ -18,13 +20,13 @@ def load_tasks_from_path(path: str | Path) -> list[TaskSpec]:
     return [load_task_spec(file) for file in files]
 
 
-def select_scorer(tasks: list[TaskSpec]):
+def select_scorer(config: RunConfig, tasks: list[TaskSpec]):
     """根据任务中声明的 scoring mode 选择评分器。"""
     modes = {task.scoring.mode for task in tasks}
     if "hybrid" in modes:
-        return HybridScorer()
+        return HybridScorer(judge_scorer=JudgeScorer(config.judge))
     if "judge" in modes:
-        return HybridScorer(rule_scorer=RuleScorer())
+        return JudgeScorer(config.judge)
     return RuleScorer()
 
 
@@ -52,9 +54,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "run":
+        load_dotenv(Path.cwd() / ".env")
         config = load_run_config(args.config)
         tasks = load_tasks_from_path(args.tasks)
-        runner = Runner(config=config, agent_loop=build_agent_loop(config), scorer=select_scorer(tasks))
+        runner = Runner(config=config, agent_loop=build_agent_loop(config), scorer=select_scorer(config, tasks))
         result = runner.run(tasks)
         print(result["run_dir"])
         return 0
