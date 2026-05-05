@@ -12,7 +12,7 @@ AgentBench 当前已经支持规则评分（`rules`）和混合评分（`hybrid`
 - 支持 `scoring.mode: hybrid` 继续组合规则评分和 Judge 评分。
 - 支持 OpenAI-compatible Chat Completions 协议。
 - 支持 Anthropic Messages API 协议。
-- 支持 run 级 Judge 配置，包括 provider、model、base_url、api_key_env、temperature、timeout_seconds 和 max_tokens。
+- 支持 run 级 Judge 配置，包括 provider、model、base_url、api_key_env、temperature、timeout_seconds、max_tokens 和有限重试参数。
 - 自动加载执行 `agentbench run` 时当前工作目录下的 `.env`，让开源用户可以通过 `.env` 提供 API key。
 - Judge 输入包含 Agent 执行过程摘要、工具调用、工具结果预览和工作区文本产物，而不是只依赖最终 assistant 文本。
 - Judge 输出解析为标准 `ScoreResult`，错误统一标记为 `scoring_error`。
@@ -23,7 +23,7 @@ AgentBench 当前已经支持规则评分（`rules`）和混合评分（`hybrid`
 - 不支持在 YAML 中写明文 `api_key`。
 - 不支持任务级覆盖 Judge 配置。
 - 不支持流式响应。
-- 不支持自动重试。
+- 不支持 Agent trial 自动重试。Judge API 调用支持有限次数的指数退避重试。
 - 不支持多 Judge 投票或 pairwise 比较。
 - 不支持数据库、leaderboard、Web UI 或远程任务队列。
 - 不实现 OpenClaw adapter 之外的新 Agent 运行后端。
@@ -50,6 +50,8 @@ run:
     temperature: 0
     timeout_seconds: 60
     max_tokens: 512
+    max_retries: 2
+    retry_backoff_seconds: 1
 ```
 
 ### Anthropic 示例
@@ -70,6 +72,8 @@ run:
     temperature: 0
     timeout_seconds: 60
     max_tokens: 512
+    max_retries: 2
+    retry_backoff_seconds: 1
 ```
 
 ### 字段说明
@@ -86,8 +90,10 @@ run:
 | `max_context_chars` | integer | 否 | `20000` | 传给 Judge 的评测上下文最大字符数。 |
 | `max_tool_result_chars` | integer | 否 | `1000` | 单条工具结果预览最大字符数。 |
 | `max_workspace_file_chars` | integer | 否 | `3000` | 单个工作区文本文件内容最大字符数。 |
+| `max_retries` | integer | 否 | `2` | Judge API 调用最大尝试次数，包含首次请求。 |
+| `retry_backoff_seconds` | number | 否 | `1.0` | 指数退避的初始等待秒数。 |
 
-`temperature` 的合法范围为 `0.0` 到 `2.0`。`timeout_seconds`、`max_tokens`、`max_context_chars`、`max_tool_result_chars` 和 `max_workspace_file_chars` 必须为正数。配置非法时，评分结果应返回 `scoring_error`。
+`temperature` 的合法范围为 `0.0` 到 `2.0`。`timeout_seconds`、`max_tokens`、`max_context_chars`、`max_tool_result_chars` 和 `max_workspace_file_chars` 必须为正数。`max_retries` 必须为 `1` 到 `5` 之间的整数，`retry_backoff_seconds` 必须大于 `0`。配置非法时，评分结果应返回 `scoring_error`。
 
 ## `.env` 加载规则
 
@@ -335,6 +341,34 @@ Payload：
 
 - 从 `content` 列表中提取 `type == "text"` 的文本片段并拼接。
 
+## Judge API 重试
+
+Judge API 调用需要支持有限重试，以降低临时网络抖动和供应商短暂不可用对评分的影响。这里的重试只作用于 Judge API 请求，不会重新执行 Agent trial，也不会重新运行任务。
+
+默认策略：
+
+- `max_retries = 2`，表示最多尝试 2 次请求。
+- `retry_backoff_seconds = 1.0`，第 1 次失败后等待 `1.0` 秒，第 2 次失败后不再等待，直接返回错误。
+- 第 `n` 次失败后的等待时间为 `retry_backoff_seconds * 2 ** (n - 1)`。
+- `max_retries` 上限为 `5`，避免评测卡死或产生不可控成本。
+
+可重试错误：
+
+- `requests` 网络异常。
+- 请求超时。
+- HTTP `429`。
+- HTTP `5xx`。
+
+不可重试错误：
+
+- 缺少 API key。
+- provider / model / temperature 等配置非法。
+- HTTP `4xx`（除 `429` 外）。
+- 响应结构不符合协议。
+- Judge 输出无法解析为合法评分 JSON。
+
+所有尝试失败后，`ScoreResult.status` 为 `scoring_error`，`notes` 应包含最后一次错误，并说明已达到最大重试次数。
+
 ## 错误处理
 
 JudgeScorer 不应抛出未捕获异常给 Runner。以下情况统一转为 `ScoreResult(status="scoring_error")`：
@@ -346,6 +380,7 @@ JudgeScorer 不应抛出未捕获异常给 Runner。以下情况统一转为 `Sc
 - `api_key_env` 对应环境变量不存在。
 - `temperature`、`timeout_seconds` 或 `max_tokens` 非法。
 - `max_context_chars`、`max_tool_result_chars` 或 `max_workspace_file_chars` 非法。
+- `max_retries` 或 `retry_backoff_seconds` 非法。
 - HTTP 请求异常。
 - HTTP 状态码不是 2xx。
 - 响应 JSON 结构不符合预期。
@@ -380,6 +415,8 @@ tests/test_cli.py                    # CLI 装配测试
 - `load_run_config()` 能加载完整 Judge 配置和默认值。
 - Judge prompt 包含 assistant message、tool call、tool result、file event、error 和 workspace 文本产物。
 - Judge prompt 对工具参数、工具结果和工作区文件内容执行截断。
+- Judge API 对网络异常、超时、HTTP `429` 和 HTTP `5xx` 执行有限指数退避重试。
+- Judge API 不重试配置错误、HTTP `4xx`（除 `429` 外）和 JSON 解析错误。
 - OpenAI provider 构造正确 endpoint、headers 和 payload。
 - Anthropic provider 构造正确 endpoint、headers 和 payload。
 - `temperature` 传入请求体。
@@ -403,6 +440,7 @@ tests/test_cli.py                    # CLI 装配测试
 - Judge 任务 YAML 示例。
 - Judge 输入上下文包含 transcript 摘要、工具调用、工具结果和工作区文本文件。
 - 上下文长度控制字段说明。
+- Judge API 重试字段和指数退避策略说明。
 - 常见错误说明。
 
 开发文档需要补充：
@@ -418,7 +456,8 @@ tests/test_cli.py                    # CLI 装配测试
 - OpenAI-compatible 请求符合 Chat Completions 基本协议。
 - Anthropic 请求符合 Messages API 基本协议。
 - Judge 输入包含 Agent 执行过程和工作区产物，并有明确截断策略。
+- Judge API 有有限次数指数退避重试，且不会重试不可恢复错误。
 - 当前工作目录下的 `.env` 自动加载生效。
 - 文档覆盖用户运行和二次开发所需信息。
 - 不引入明文 `api_key` 配置。
-- 不引入自动重试、流式响应或任务级 Judge 配置。
+- 不引入 Agent trial 自动重试、流式响应或任务级 Judge 配置。
