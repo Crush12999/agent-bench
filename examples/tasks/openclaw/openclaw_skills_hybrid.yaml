@@ -1,6 +1,6 @@
 id: openclaw_skills_hybrid
 name: OpenClaw skills hybrid
-timeout_seconds: 120
+timeout_seconds: 180
 pass_threshold: 0.7
 prompt: |
   Use `openclaw skills list --json` as your primary fact source.

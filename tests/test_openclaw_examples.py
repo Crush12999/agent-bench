@@ -41,6 +41,7 @@ def test_openclaw_skills_hybrid_example_has_expected_scoring():
     task = load_tasks_from_path(Path("examples/tasks/openclaw/openclaw_skills_hybrid.yaml"))[0]
 
     assert task.id == "openclaw_skills_hybrid"
+    assert task.timeout_seconds == 180
     assert task.scoring.mode == "hybrid"
     assert task.pass_threshold == 0.7
     assert task.scoring.weights == {"rules": 0.6, "judge": 0.4}
