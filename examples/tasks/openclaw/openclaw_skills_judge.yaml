@@ -1,0 +1,29 @@
+id: openclaw_skills_judge
+name: OpenClaw skills judge
+timeout_seconds: 180
+pass_threshold: 0.75
+prompt: |
+  Use `openclaw skills list --json` as your primary fact source.
+  Save the raw command output to a file named `skills_raw.json` in the current workspace.
+  Then create a file named `skills_assessment.md` in the current workspace.
+
+  The assessment must be based only on the raw file and command output, and must include:
+  - a short overview of the current local OpenClaw skills state
+  - 2 to 4 concrete observations grounded in the command output
+  - 1 to 2 practical suggestions for a new user
+
+  Do not invent skills, statuses, or capabilities that are not supported by the command output.
+  exact counts and status claims must be copied from or directly supported by `openclaw skills list --json`.
+  If uncertain, omit counts or label uncertainty instead of guessing.
+scoring:
+  mode: judge
+  rules: []
+  judge_rubric: |
+    Score the submission strictly using the following criteria:
+    - It uses `openclaw skills list --json` as the primary fact source.
+    - It does not invent skills, statuses, or capabilities not supported by the observed output.
+    - It clearly summarizes the most relevant facts from the local skills inventory.
+    - Its suggestions are concrete, restrained, and helpful to a new user.
+
+    Give high scores only when the report is fact-grounded, clear, and useful.
+    If the report is generic, speculative, or weakly tied to the observed output, reduce the score.

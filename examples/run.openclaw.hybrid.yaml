@@ -1,0 +1,18 @@
+run:
+  adapter: openclaw
+  model: minimax/MiniMax-M2.7
+  trials: 1
+  parallelism: 1
+  output_dir: runs
+  workspace_policy: all
+  adapter_config:
+    openclaw_binary: openclaw
+    session_artifact_timeout_seconds: 15
+  judge:
+    provider: openai
+    model: gpt-5.4
+    base_url: https://api.funai.vip/v1
+    api_key_env: OPENAI_API_KEY
+    temperature: 0
+    timeout_seconds: 60
+    max_tokens: 512

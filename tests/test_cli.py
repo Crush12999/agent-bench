@@ -107,6 +107,56 @@ def test_select_scorer_injects_judge_config_for_hybrid():
     assert scorer.judge_scorer.config is judge
 
 
+def test_select_scorer_dispatches_rules_task_in_mixed_mode(tmp_path: Path):
+    config = RunConfig(adapter="fake", model="fake")
+    rules_task = TaskSpec(
+        id="r",
+        name="R",
+        prompt="p",
+        timeout_seconds=1,
+        scoring=ScoringSpec(
+            mode="rules",
+            rules=[RuleSpec(id="summary_exists", type="file_exists", points=1, params={"path": "summary.md"})],
+        ),
+    )
+    judge_task = TaskSpec(
+        id="j",
+        name="J",
+        prompt="p",
+        timeout_seconds=1,
+        scoring=ScoringSpec(mode="judge", judge_rubric="score it"),
+    )
+    hybrid_task = TaskSpec(
+        id="h",
+        name="H",
+        prompt="p",
+        timeout_seconds=1,
+        scoring=ScoringSpec(mode="hybrid", judge_rubric="score it"),
+    )
+    (tmp_path / "summary.md").write_text("ok\n", encoding="utf-8")
+    run = AgentRunResult(
+        task_id="r",
+        trial_id=1,
+        status="success",
+        started_at="2026-01-01T00:00:00Z",
+        finished_at="2026-01-01T00:00:01Z",
+        duration_seconds=1.0,
+        workspace_path=str(tmp_path),
+        log_dir=str(tmp_path),
+        stdout_path=str(tmp_path / "stdout.txt"),
+        stderr_path=str(tmp_path / "stderr.txt"),
+        trace_path=str(tmp_path / "trace.json"),
+        adapter_log_path=str(tmp_path / "adapter.log"),
+        trace=Trace(),
+    )
+
+    result = select_scorer(config, [rules_task, judge_task, hybrid_task]).score(rules_task, run)
+
+    assert result.status == "scored"
+    assert result.score == 1.0
+    assert result.notes != "judge_rubric missing"
+
+
 def test_build_openclaw_agent_loop_uses_model_and_state_dir(tmp_path: Path):
     config = RunConfig(
         adapter="openclaw",

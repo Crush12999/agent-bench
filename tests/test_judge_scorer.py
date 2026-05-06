@@ -121,6 +121,34 @@ def test_parse_judge_scores_total_notes(tmp_path: Path):
     assert [item.passed for item in result.breakdown] == [True, False]
 
 
+def test_parse_judge_uses_average_scores_when_total_is_out_of_range(tmp_path: Path):
+    scorer = JudgeScorer(make_judge_config())
+    result = scorer.parse_judge_text(
+        make_task(),
+        make_run(tmp_path, Trace()),
+        (
+            '{"scores": {'
+            '"uses_openclaw_json_primary_source": 0.2, '
+            '"no_invented_facts": 0.0, '
+            '"clear_relevant_summary": 0.6, '
+            '"helpful_restrained_suggestions": 0.3'
+            '}, "total": 1.1, "notes": "criteria were summed"}'
+        ),
+    )
+
+    assert result.status == "scored"
+    assert result.score == pytest.approx(0.275)
+    assert result.passed is False
+    assert result.notes == "criteria were summed"
+    assert [item.id for item in result.breakdown] == [
+        "uses_openclaw_json_primary_source",
+        "no_invented_facts",
+        "clear_relevant_summary",
+        "helpful_restrained_suggestions",
+    ]
+    assert [item.score for item in result.breakdown] == [0.2, 0.0, 0.6, 0.3]
+
+
 def test_parse_judge_simplified_score_reason(tmp_path: Path):
     scorer = JudgeScorer(make_judge_config())
     result = scorer.parse_judge_text(make_task(), make_run(tmp_path, Trace()), '{"score": 0.7, "reason": "ok"}')
@@ -129,6 +157,37 @@ def test_parse_judge_simplified_score_reason(tmp_path: Path):
     assert result.score == 0.7
     assert result.passed is False
     assert result.notes == "ok"
+
+
+def test_parse_judge_uses_valid_score_when_total_is_out_of_range(tmp_path: Path):
+    scorer = JudgeScorer(make_judge_config())
+    result = scorer.parse_judge_text(
+        make_task(),
+        make_run(tmp_path, Trace()),
+        '{"total": 1.1, "score": 0.5, "notes": "use score"}',
+    )
+
+    assert result.status == "scored"
+    assert result.score == 0.5
+    assert result.passed is False
+    assert result.notes == "use score"
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        '{"scores": {"a": 0.8}, "score": true}',
+        '{"scores": {"a": 0.8}, "total": "bad"}',
+        '{"total": "bad", "score": 0.5}',
+        '{"total": true, "score": 0.5}',
+    ],
+)
+def test_parse_judge_invalid_total_or_score_type_does_not_fallback_to_scores(output: str, tmp_path: Path):
+    scorer = JudgeScorer(make_judge_config())
+    result = scorer.parse_judge_text(make_task(), make_run(tmp_path, Trace()), output)
+
+    assert result.status == "scoring_error"
+    assert result.score == 0.0
 
 
 def test_parse_judge_invalid_output_is_scoring_error(tmp_path: Path):
@@ -147,8 +206,11 @@ def test_parse_judge_invalid_structure_is_scoring_error(tmp_path: Path):
         '{"scores": [], "total": 0.8}',
         '{"scores": {"accuracy": "high"}, "total": 0.8}',
         '{"total": 1.2}',
+        '{"scores": {}, "total": 1.1}',
         '{"scores": {"accuracy": 2.0}, "total": 0.8}',
+        '{"scores": {"accuracy": 2.0}, "total": 1.1}',
         '{"scores": {"accuracy": true}, "total": 0.8}',
+        '{"scores": {"accuracy": true}, "total": 1.1}',
         '{"score": true}',
         '{"notes": "missing total"}',
     ]:

@@ -62,6 +62,14 @@ agentbench run --config examples/run.openclaw.yaml examples/tasks/openclaw_smoke
 
 该示例使用 `minimax/MiniMax-M2.7`，会要求 OpenClaw 在 trial 工作区创建 `summary.md`，并用规则评分验证文件内容。
 
+如需查看 Judge 与 Hybrid 配置示例，需要先通过环境变量或 `.env` 提供 `OPENAI_API_KEY`，不要把明文 API key 写入配置文件：
+
+```bash
+agentbench run --config examples/run.openclaw.judge.yaml examples/tasks/openclaw/openclaw_skills_judge.yaml
+agentbench run --config examples/run.openclaw.hybrid.yaml examples/tasks/openclaw/openclaw_skills_hybrid.yaml
+agentbench run --config examples/run.openclaw.all.yaml examples/tasks/openclaw
+```
+
 ## 基本概念
 
 | 概念 | 说明 |

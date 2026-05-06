@@ -214,12 +214,9 @@ class JudgeScorer:
         if not isinstance(payload, dict):
             return self._error(task, run, "judge output must be a JSON object")
 
-        total = self._extract_total(payload)
-        if total is None or not 0.0 <= total <= 1.0:
-            return self._error(task, run, "judge score must be between 0.0 and 1.0")
-
         breakdown: list[CheckResult] = []
         scores = payload.get("scores")
+        parsed_scores: list[tuple[str, float]] = []
         if "scores" in payload:
             if not isinstance(scores, dict):
                 return self._error(task, run, "judge scores must be an object")
@@ -239,6 +236,14 @@ class JudgeScorer:
                 )
                 for item_id, item_score in parsed_scores
             ]
+
+        total, has_invalid_total_type = self._extract_total(payload)
+        if has_invalid_total_type:
+            return self._error(task, run, "judge score must be numeric")
+        if total is None:
+            if not parsed_scores:
+                return self._error(task, run, "judge score must be between 0.0 and 1.0")
+            total = sum(item_score for _, item_score in parsed_scores) / len(parsed_scores)
 
         notes = str(payload.get("notes", payload.get("reason", "")))
         return ScoreResult(
@@ -329,13 +334,21 @@ class JudgeScorer:
         """返回单个工作区文件最大字符数。"""
         return self.config.max_workspace_file_chars if self.config else 3000
 
-    def _extract_total(self, payload: dict) -> float | None:
+    def _extract_total(self, payload: dict) -> tuple[float | None, bool]:
         """从推荐或简化 Judge JSON 结构中提取总分。"""
-        value = payload.get("total", payload.get("score"))
-        try:
-            return self._extract_number(value)
-        except (TypeError, ValueError):
-            return None
+        has_invalid_type = False
+        total: float | None = None
+        for field_name in ("total", "score"):
+            if field_name not in payload:
+                continue
+            try:
+                value = self._extract_number(payload[field_name])
+            except (TypeError, ValueError):
+                has_invalid_type = True
+                continue
+            if total is None and 0.0 <= value <= 1.0:
+                total = value
+        return total, has_invalid_type
 
     def _extract_number(self, value: object) -> float:
         """从 JSON 数字中提取浮点数，排除 bool 等非评分值。"""

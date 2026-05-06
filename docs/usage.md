@@ -68,6 +68,26 @@ agentbench run --config examples/run.openclaw.yaml examples/tasks/openclaw_smoke
 
 该示例使用 `minimax/MiniMax-M2.7`，会要求 OpenClaw 在当前 trial 工作区创建 `summary.md`，并用 `file_exists` 和 `file_contains` 规则验证结果。
 
+如果想查看三种 OpenClaw 评分模式的完整示例，可以使用 `examples/tasks/openclaw/` 目录中的任务：
+
+- `openclaw_smoke.yaml`：`rules`
+- `openclaw_skills_judge.yaml`：`judge`
+- `openclaw_skills_hybrid.yaml`：`hybrid`
+
+对应运行命令：
+
+```bash
+agentbench run --config examples/run.openclaw.judge.yaml examples/tasks/openclaw/openclaw_skills_judge.yaml
+agentbench run --config examples/run.openclaw.hybrid.yaml examples/tasks/openclaw/openclaw_skills_hybrid.yaml
+agentbench run --config examples/run.openclaw.all.yaml examples/tasks/openclaw
+```
+
+说明：
+
+- `run.judge` 负责配置 Judge 模型和 API 信息。
+- task 中的 `scoring.mode`、`rules` 和 `judge_rubric` 负责定义具体评分方式。
+- `judge`、`hybrid` 和 `all` 示例需要通过环境变量或 `.env` 提供 `OPENAI_API_KEY`，不要把明文 API key 写入配置文件。
+
 ## 运行配置
 
 运行配置文件描述一次评测的全局参数。

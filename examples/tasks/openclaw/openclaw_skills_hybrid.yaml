@@ -1,0 +1,56 @@
+id: openclaw_skills_hybrid
+name: OpenClaw skills hybrid
+timeout_seconds: 120
+pass_threshold: 0.7
+prompt: |
+  Use `openclaw skills list --json` as your primary fact source.
+
+  Create two files in the current workspace:
+  - `skills_inventory.json`
+  - `skills_remediation.md`
+
+  Requirements:
+  - `skills_inventory.json` should capture a minimal structured inventory of the observed skills state and must include a top-level "skills" key.
+  - `skills_remediation.md` should explain available skills, likely gaps or limits, and practical next steps for a new user.
+  - `skills_remediation.md` must use these exact headings: `## Available Skills`, `## Gaps Or Limits`, `## Next Steps`.
+  - If a status is unclear from the command output, explicitly say it is uncertain instead of guessing.
+scoring:
+  mode: hybrid
+  weights:
+    rules: 0.6
+    judge: 0.4
+  rules:
+    - id: inventory_exists
+      type: file_exists
+      points: 1
+      params:
+        path: skills_inventory.json
+    - id: remediation_exists
+      type: file_exists
+      points: 1
+      params:
+        path: skills_remediation.md
+    - id: inventory_has_skills_key
+      type: file_contains
+      points: 1
+      params:
+        path: skills_inventory.json
+        patterns:
+          - '"skills"'
+    - id: remediation_has_sections
+      type: file_contains
+      points: 1
+      params:
+        path: skills_remediation.md
+        patterns:
+          - "## Available Skills"
+          - "## Gaps Or Limits"
+          - "## Next Steps"
+  judge_rubric: |
+    Score the submission strictly using the following criteria:
+    - The structured inventory is consistent with the observed `openclaw skills list --json` output.
+    - The remediation document stays grounded in observed facts.
+    - Uncertain states are explicitly labeled as uncertain instead of guessed.
+    - The document presents useful next steps in a clear, practical order.
+
+    Reduce the score if the response is generic, speculative, or disconnected from the observed skills state.

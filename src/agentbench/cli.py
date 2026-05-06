@@ -8,6 +8,7 @@ from agentbench.adapters.openclaw import OpenClawAgentLoop
 from agentbench.core.runner import Runner
 from agentbench.core.task import RunConfig, TaskSpec, load_run_config, load_task_spec
 from agentbench.env import load_dotenv
+from agentbench.scorers.dispatch import DispatchScorer
 from agentbench.scorers.hybrid import HybridScorer
 from agentbench.scorers.judge import JudgeScorer
 from agentbench.scorers.rules import RuleScorer
@@ -23,6 +24,9 @@ def load_tasks_from_path(path: str | Path) -> list[TaskSpec]:
 def select_scorer(config: RunConfig, tasks: list[TaskSpec]):
     """根据任务中声明的 scoring mode 选择评分器。"""
     modes = {task.scoring.mode for task in tasks}
+    if len(modes) > 1:
+        judge_scorer = JudgeScorer(config.judge)
+        return DispatchScorer(judge_scorer=judge_scorer, hybrid_scorer=HybridScorer(judge_scorer=judge_scorer))
     if "hybrid" in modes:
         return HybridScorer(judge_scorer=JudgeScorer(config.judge))
     if "judge" in modes:
